@@ -356,6 +356,8 @@
         <option value="0" selected>DOMAIN WARP (Original)</option>
         <option value="1">NAVIER-STOKES (Fluid Dynamics)</option>
         <option value="2">VISCOELASTIC (Shear-Thinning Lava)</option>
+        <option value="3">⚡ MHD PLASMA (Magnetohydrodynamics)</option>
+        <option value="4">☀️ SOLAR RECONNECTION (Coronal Flares)</option>
       </select>
 
       <!-- SUBSTRATE & MODE -->
@@ -558,6 +560,8 @@
         <button class="pbtn preset"        data-p="molten">◻ MOLTEN</button>
         <button class="pbtn preset"        data-p="abyssal">◻ ABYSSAL</button>
         <button class="pbtn preset"        data-p="fracture">◻ FRACTURE</button>
+        <button class="pbtn preset"        data-p="mhd_plasma">◻ MHD PLASMA</button>
+        <button class="pbtn preset"        data-p="solar_flare">◻ SOLAR FLARE</button>
       </div>
       <button id="pFreezeBtn" class="pbtn">⏸ FREEZE</button>
       <button id="resetBtn"   class="pbtn danger">↺ RESET DEFAULTS</button>
@@ -667,18 +671,45 @@
 
       vec2 wo;
       if (u_phys_regime > 0.5) {
-        /* Navier-Stokes & Viscoelastic hydrodynamics: calculate curl vorticity + momentum field */
+        /* Navier-Stokes hydrodynamics: calculate curl vorticity + momentum field */
         vec2 pFine = lensUV * (u_noise_scale * 1.8) + shift * 2.0;
         float curl = noise(pFine + vec2(wo0.y, wo0.x) * 3.0) - noise(pFine - vec2(wo0.y, wo0.x) * 3.0);
         vec2 vortForce = vec2(-curl, curl) * u_vorticity * 0.5;
 
-        if (u_phys_regime > 1.5) {
-          /* Viscoelastic shear-thinning: strain-rate dependent non-Newtonian flow */
+        if (u_phys_regime > 3.5) {
+          /* Regime 4: Solar Reconnection & Coronal Flare Eruptions */
+          vec2 pMag = lensUV * (u_noise_scale * 2.2) + shift * 2.5;
+          float dAx = noise(pMag + vec2(0.05, 0.0)) - noise(pMag - vec2(0.05, 0.0));
+          float dAy = noise(pMag + vec2(0.0, 0.05)) - noise(pMag - vec2(0.0, 0.05));
+          vec2 Bfield = vec2(dAy, -dAx);
+          float Jz = (dAx + dAy) * 10.0; /* Current density */
+
+          /* Magnetic line snapping flare burst when current density J_z exceeds threshold */
+          float flareThreshold = smoothstep(0.3, 0.9, abs(Jz));
+          vec2 flareBurst = vec2(-Bfield.y, Bfield.x) * flareThreshold * 1.8;
+          vec2 lorentz = vec2(-Jz * Bfield.y, Jz * Bfield.x) * 0.4;
+
+          wo = wo0 + vortForce * 0.5 + lorentz + flareBurst;
+        } else if (u_phys_regime > 2.5) {
+          /* Regime 3: 2D Magnetohydrodynamics (MHD Plasma & Lorentz Tension) */
+          vec2 pMag = lensUV * (u_noise_scale * 1.6) + shift * 1.8;
+          float dAx = noise(pMag + vec2(0.04, 0.0)) - noise(pMag - vec2(0.04, 0.0));
+          float dAy = noise(pMag + vec2(0.0, 0.04)) - noise(pMag - vec2(0.0, 0.04));
+          vec2 Bfield = vec2(dAy, -dAx);
+          float Jz = (dAx + dAy) * 8.0;
+
+          /* Lorentz force F_L = J_z x B (magnetic tension along field lines) */
+          vec2 lorentz = vec2(-Jz * Bfield.y, Jz * Bfield.x) * u_vorticity * 0.6;
+          vec2 alfvenWave = vec2(sin(Bfield.x * 12.0), cos(Bfield.y * 12.0)) * 0.2;
+
+          wo = wo0 * 0.6 + lorentz + alfvenWave;
+        } else if (u_phys_regime > 1.5) {
+          /* Regime 2: Viscoelastic shear-thinning */
           float strain = length(vortForce) + 0.001;
           float shearVisc = clamp(1.0 / (1.0 + strain * 5.0), 0.2, 2.0);
           wo = mix(wo0 + vortForce, (wo0 + vortForce) * shearVisc, 0.6);
         } else {
-          /* Navier-Stokes incompressible fluid turbulence */
+          /* Regime 1: Navier-Stokes */
           wo = wo0 + vortForce;
         }
       } else {
@@ -832,6 +863,16 @@
         vec2 pFine = a_pPos * (u_noise_scale * 1.8) + shift * 2.0;
         float curl = noise(pFine + vec2(vel.y, vel.x) * 3.0) - noise(pFine - vec2(vel.y, vel.x) * 3.0);
         vel += vec2(-curl, curl) * 0.8;
+
+        if (u_phys_regime > 2.5) {
+          vec2 pMag = a_pPos * (u_noise_scale * 1.8) + shift * 2.0;
+          float dAx = noise(pMag + vec2(0.04, 0.0)) - noise(pMag - vec2(0.04, 0.0));
+          float dAy = noise(pMag + vec2(0.0, 0.04)) - noise(pMag - vec2(0.0, 0.04));
+          vec2 Bfield = vec2(dAy, -dAx);
+          float Jz = (dAx + dAy) * 8.0;
+          vec2 lorentz = vec2(-Jz * Bfield.y, Jz * Bfield.x) * 1.2;
+          vel += lorentz;
+        }
       }
 
       if (u_touch_count > 1.5) {
@@ -1216,10 +1257,12 @@
   };
 
   const PRESETS = {
-    default:  {...DEFAULTS},
-    molten:   {physRegime:1, mode:0, partOn:true, partCount:12000, partSize:5.0, partSpeed:1.5, baseSpd:0.15, audioMult:20, smoothing:0.70, noiseScale:3.5, scrollSpd:0.4, scrollMag:3.0, warpAmt:0.70, warpSpd:0.05, warpScaleVar:0.35, vorticity:1.4, viscosity:0.99, colorSpeed:2.0, speedVar:0.4},
-    abyssal:  {physRegime:0, mode:0, partOn:true, partCount:6000,  partSize:3.0, partSpeed:0.4, baseSpd:0.04, audioMult:5,  smoothing:0.95, noiseScale:1.5, scrollSpd:0.1, scrollMag:1.0, warpAmt:0.15, warpSpd:0.005,warpScaleVar:0.0,  vorticity:0.4, viscosity:0.97, colorSpeed:0.3, speedVar:0.1},
-    fracture: {physRegime:2, mode:0, partOn:true, partCount:15000, partSize:6.0, partSpeed:2.0, baseSpd:0.12, audioMult:18, smoothing:0.60, noiseScale:6.0, scrollSpd:0.6, scrollMag:4.0, warpAmt:0.80, warpSpd:0.08, warpScaleVar:0.75, vorticity:2.0, viscosity:0.995,colorSpeed:3.0, speedVar:0.9},
+    default:     {...DEFAULTS},
+    molten:      {physRegime:1, mode:0, partOn:true, partCount:12000, partSize:5.0, partSpeed:1.5, baseSpd:0.15, audioMult:20, smoothing:0.70, noiseScale:3.5, scrollSpd:0.4, scrollMag:3.0, warpAmt:0.70, warpSpd:0.05, warpScaleVar:0.35, vorticity:1.4, viscosity:0.99, colorSpeed:2.0, speedVar:0.4},
+    abyssal:     {physRegime:0, mode:0, partOn:true, partCount:6000,  partSize:3.0, partSpeed:0.4, baseSpd:0.04, audioMult:5,  smoothing:0.95, noiseScale:1.5, scrollSpd:0.1, scrollMag:1.0, warpAmt:0.15, warpSpd:0.005,warpScaleVar:0.0,  vorticity:0.4, viscosity:0.97, colorSpeed:0.3, speedVar:0.1},
+    fracture:    {physRegime:2, mode:0, partOn:true, partCount:15000, partSize:6.0, partSpeed:2.0, baseSpd:0.12, audioMult:18, smoothing:0.60, noiseScale:6.0, scrollSpd:0.6, scrollMag:4.0, warpAmt:0.80, warpSpd:0.08, warpScaleVar:0.75, vorticity:2.0, viscosity:0.995,colorSpeed:3.0, speedVar:0.9},
+    mhd_plasma:  {physRegime:3, mode:0, partOn:true, partCount:14000, partSize:4.5, partSpeed:1.6, baseSpd:0.14, audioMult:16, noiseScale:3.0, scrollSpd:0.5, scrollMag:2.5, warpAmt:0.65, warpSpd:0.04, vorticity:1.5, viscosity:0.985,colorSpeed:1.8, speedVar:0.5},
+    solar_flare: {physRegime:4, mode:0, partOn:true, partCount:18000, partSize:5.5, partSpeed:2.2, baseSpd:0.18, audioMult:22, noiseScale:4.2, scrollSpd:0.7, scrollMag:3.5, warpAmt:0.85, warpSpd:0.06, vorticity:2.2, viscosity:0.99, colorSpeed:2.5, speedVar:0.8},
   };
 
   let P = {...DEFAULTS};
