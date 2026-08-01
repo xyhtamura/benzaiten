@@ -1,0 +1,1482 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Benzaiten (弁財天) · Speculative Flow Instrument</title>
+  <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Outfit:wght@300;400;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-dark:    #060913;
+      --panel-bg:   rgba(6, 10, 22, 0.94);
+      --cyan:       #38bdf8;
+      --indigo:     #6366f1;
+      --frost:      #e0f2fe;
+      --magenta:    #f43f5e;
+      --gold:       #fbbf24;
+      --dim:        #334155;
+      --text:       #94a3b8;
+      --val:        #7dd3fc;
+      --border:     rgba(56, 189, 248, 0.18);
+      --pw:         310px;
+      --th:         44px;
+      --tab:        28px;
+      --font-mono: 'Share Tech Mono', 'Courier New', monospace;
+      --font-sans: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg-dark); font-family: var(--font-sans); color: var(--text); touch-action: none; }
+
+    #glCanvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+
+    /* ── DROP ZONE ──────────────────────────── */
+    #dropZone {
+      position: fixed; inset: 0; z-index: 50;
+      display: flex; align-items: center; justify-content: center;
+      background: rgba(6, 9, 19, 0.88);
+      transition: background 0.3s;
+      cursor: pointer;
+    }
+    #dropZone.drag-over { background: rgba(6, 9, 19, 0.96); }
+    #dropZone.hidden    { display: none; }
+
+    #dropInner {
+      text-align: center; user-select: none; pointer-events: none;
+      padding: 32px 24px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: rgba(15, 23, 42, 0.6);
+      backdrop-filter: blur(12px);
+      max-width: 90vw; width: 380px;
+      position: relative;
+    }
+    #dropIcon { font-size: 36px; color: var(--cyan); opacity: 0.85; margin-bottom: 8px; }
+    #dropTitle {
+      font-size: 15px; font-weight: 600; letter-spacing: 0.25em; color: var(--frost);
+      margin-bottom: 6px; font-family: var(--font-mono);
+    }
+    #dropSub { font-size: 11px; color: var(--text); margin-bottom: 6px; }
+    #dropHint { font-size: 10px; color: var(--cyan); opacity: 0.7; }
+
+    /* ── TOP BAR ────────────────────────────── */
+    #topBar {
+      position: fixed; top: 0; left: 0; right: 0; height: var(--th);
+      background: rgba(6, 9, 19, 0.92); border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; gap: 6px; padding: 0 10px;
+      z-index: 100; backdrop-filter: blur(14px);
+      transition: opacity 0.4s, transform 0.5s cubic-bezier(0.22,1,0.36,1);
+    }
+    #titleWrap { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+    #statusOrb {
+      width: 8px; height: 8px; border-radius: 50%; background: var(--dim); flex-shrink: 0;
+      transition: background 0.5s, box-shadow 0.5s;
+    }
+    #statusOrb.live { background: var(--cyan); box-shadow: 0 0 8px var(--cyan); animation: orbPulse 2s ease-in-out infinite; }
+    @keyframes orbPulse { 0%,100%{opacity:1}50%{opacity:0.4} }
+    #titleText { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.25em; color: var(--frost); font-weight: 600; flex-shrink: 0; }
+    .sep { width: 1px; height: 18px; background: var(--border); flex-shrink: 0; }
+    #vuWrap { display: flex; align-items: center; gap: 5px; flex-shrink: 0; }
+    #vuLabel { font-family: var(--font-mono); font-size: 9px; color: var(--dim); }
+    #vuMeter { width: 50px; height: 8px; background: rgba(0,0,0,0.6); border: 1px solid var(--border); border-radius: 2px; overflow: hidden; }
+    #vuFill   { height: 100%; width: 0%; background: linear-gradient(to right, var(--cyan) 0%, var(--gold) 60%, var(--magenta) 100%); transition: width 0.04s linear; }
+    #seismicWrap { font-family: var(--font-mono); font-size: 9px; color: var(--dim); flex-shrink: 0; }
+    #seismicVal  { color: var(--val); }
+    .spacer { flex: 1; }
+    .tbtn {
+      padding: 0 10px; height: 30px; font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.08em;
+      color: var(--text); background: transparent; border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 6px;
+      cursor: pointer; transition: all 0.15s; display: flex; align-items: center; flex-shrink: 0; white-space: nowrap;
+    }
+    .tbtn:hover, .tbtn:active { color: var(--cyan); border-color: var(--cyan); background: rgba(56, 189, 248, 0.12); }
+    .tbtn.active { color: var(--cyan); border-color: var(--cyan); background: rgba(56, 189, 248, 0.18); }
+    .tbtn.phos   { color: var(--frost); border-color: rgba(224, 242, 254, 0.35); }
+    .tbtn.phos.done { color: var(--dim); border-color: transparent; cursor: default; pointer-events: none; }
+    .tbtn.warn:hover { color: var(--magenta); border-color: var(--magenta); background: rgba(244, 63, 94, 0.1); }
+    .tbtn.rx-on  { color: var(--frost); border-color: rgba(224, 242, 254, 0.4); }
+
+    /* ── PANEL & RESPONSIVE DRAWER ───────────── */
+    #panel {
+      position: fixed; top: var(--th); right: 0;
+      width: var(--pw); height: calc(100% - var(--th));
+      background: var(--panel-bg); border-left: 1px solid var(--border);
+      z-index: 90; display: flex; overflow: hidden;
+      transform: translateX(0);
+      transition: transform 0.38s cubic-bezier(0.22,1,0.36,1), opacity 0.4s;
+      backdrop-filter: blur(16px);
+    }
+    #panel.hidden { transform: translateX(calc(var(--pw) - var(--tab))); }
+    #panelScroll {
+      flex:1; overflow-y:auto; overflow-x:hidden; padding: 12px 14px 40px;
+      scrollbar-width:thin; scrollbar-color: var(--border) transparent;
+      -webkit-overflow-scrolling: touch;
+    }
+    #panelScroll::-webkit-scrollbar { width:4px; }
+    #panelScroll::-webkit-scrollbar-thumb { background:var(--border); border-radius:2px; }
+    #panelTab {
+      width:var(--tab); min-width:var(--tab); flex-shrink:0;
+      display:flex; flex-direction:column; align-items:center; justify-content:center;
+      cursor:pointer; font-family:var(--font-mono); font-size:11px; color:var(--cyan);
+      border-left:1px solid var(--border); user-select:none;
+      transition:color 0.15s, background 0.15s; z-index:11;
+      writing-mode: vertical-rl; text-orientation: mixed; letter-spacing: 0.15em;
+    }
+    #panelTab:hover { background:rgba(56, 189, 248, 0.15); color:var(--frost); }
+
+    /* Mobile Responsive Panel Adjustments */
+    @media (max-width: 768px) {
+      :root { --pw: 100vw; --tab: 44px; }
+      #panel { border-left: none; border-top: 1px solid var(--border); }
+      #panel.hidden { transform: translateY(calc(100% - 44px)); }
+      #panelTab {
+        width: 100%; height: 44px; border-left: none; border-bottom: 1px solid var(--border);
+        background: rgba(6, 10, 22, 0.96); position: absolute; top: 0; left: 0; right: 0;
+        writing-mode: horizontal-tb; flex-direction: row; gap: 8px;
+      }
+      #panelScroll { padding-top: 50px; }
+      #vuWrap, #seismicWrap { display: none; }
+    }
+
+    /* ── SECTION HEADERS ────────────────────── */
+    .sec {
+      font-family: var(--font-mono); font-size: 10px; font-weight: 600; letter-spacing: 0.25em; color: var(--cyan);
+      margin: 16px 0 10px; padding-bottom: 6px;
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; gap: 6px;
+    }
+    .sec:first-child { margin-top: 4px; }
+    .sec::before { content: '◈'; color: var(--gold); font-size: 10px; }
+
+    /* ── TOUCH-FRIENDLY SLIDERS ──────────────── */
+    .cr { margin-bottom: 12px; }
+    .cl { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
+    .cn { font-size: 11px; font-weight: 500; letter-spacing: 0.05em; color: var(--text); }
+    .cv { font-family: var(--font-mono); font-size: 11px; color: var(--val); min-width: 44px; text-align: right; }
+    input[type=range] {
+      -webkit-appearance: none; appearance: none;
+      width: 100%; height: 28px; background: transparent; cursor: pointer; display: block;
+      touch-action: none;
+    }
+    input[type=range]::-webkit-slider-runnable-track {
+      height: 6px;
+      background: linear-gradient(to right, var(--cyan) var(--pct,0%), rgba(51, 65, 85, 0.5) var(--pct,0%));
+      border-radius: 3px;
+    }
+    input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance: none; width: 18px; height: 18px; margin-top: -6px;
+      background: var(--frost); border: 2px solid var(--cyan); border-radius: 50%;
+      box-shadow: 0 0 10px rgba(56, 189, 248, 0.6);
+    }
+    input[type=range]::-moz-range-track { height: 6px; background: rgba(51, 65, 85, 0.5); border-radius: 3px; }
+    input[type=range]::-moz-range-progress { height: 6px; background: var(--cyan); border-radius: 3px; }
+    input[type=range]::-moz-range-thumb { width: 18px; height: 18px; background: var(--frost); border: 2px solid var(--cyan); border-radius: 50%; }
+    input[type=range].dimmed { opacity: 0.3; pointer-events: none; }
+
+    /* ── MODE & FIT BUTTONS ─────────────────── */
+    .fit-group { display: flex; gap: 4px; margin-bottom: 10px; }
+    .fit-btn {
+      flex: 1; min-height: 36px; padding: 6px 4px; font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.08em;
+      color: var(--text); background: rgba(15, 23, 42, 0.5); border: 1px solid rgba(56, 189, 248, 0.2); border-radius: 6px;
+      cursor: pointer; text-align: center; transition: all 0.15s; white-space: nowrap;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .fit-btn:hover, .fit-btn:active { color: var(--cyan); border-color: var(--cyan); }
+    .fit-btn.active { color: var(--frost); border-color: var(--cyan); background: rgba(56, 189, 248, 0.2); font-weight: 600; }
+    .fit-btn.gold.active { color: var(--gold); border-color: var(--gold); background: rgba(251, 191, 36, 0.18); }
+
+    .source-row { display: flex; gap: 4px; margin-bottom: 8px; }
+    .src-btn {
+      flex: 1; min-height: 34px; padding: 6px 2px; font-family: var(--font-mono); font-size: 10px;
+      color: var(--text); background: transparent; border: 1px solid rgba(56, 189, 248, 0.2); border-radius: 6px;
+      cursor: pointer; text-align: center; transition: all 0.15s;
+    }
+    .src-btn:hover, .src-btn:active { color: var(--cyan); border-color: var(--cyan); }
+    .src-btn.active { color: var(--cyan); border-color: var(--cyan); background: rgba(56, 189, 248, 0.15); }
+
+    .edge-group { display: flex; gap: 4px; margin-bottom: 8px; }
+    .edge-btn {
+      flex: 1; min-height: 34px; padding: 6px 2px; font-family: var(--font-mono); font-size: 9px;
+      color: var(--text); background: transparent; border: 1px solid rgba(56, 189, 248, 0.2); border-radius: 6px;
+      cursor: pointer; text-align: center; transition: all 0.15s;
+    }
+    .edge-btn:hover, .edge-btn:active { color: var(--cyan); border-color: var(--cyan); }
+    .edge-btn.active { color: var(--indigo); border-color: var(--indigo); background: rgba(99, 102, 241, 0.18); }
+
+    /* ── GRADIENT STOPS & PREVIEW ───────────── */
+    #gradPrev {
+      height: 18px; width: 100%; border-radius: 4px;
+      border: 1px solid var(--border); margin-bottom: 10px;
+      box-shadow: inset 0 0 6px rgba(0,0,0,0.5);
+    }
+    .stop-card {
+      background: rgba(15, 23, 42, 0.7);
+      border: 1px solid rgba(56, 189, 248, 0.2);
+      border-radius: 6px; padding: 6px 8px; margin-bottom: 6px;
+    }
+    .stop-top { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+    .sr-lbl { font-family: var(--font-mono); font-size: 9px; color: var(--dim); width: 16px; flex-shrink: 0; }
+    .sr-dot {
+      width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0;
+      border: 1px solid rgba(255,255,255,0.25); transition: background 0.1s;
+    }
+    input[type=color].cp {
+      -webkit-appearance: none; appearance: none; flex: 1; height: 26px; padding: 1px;
+      border: 1px solid var(--border); border-radius: 4px; cursor: pointer; background: transparent;
+    }
+    input[type=color].cp::-webkit-color-swatch-wrapper { padding: 0; }
+    input[type=color].cp::-webkit-color-swatch { border: none; border-radius: 3px; }
+    .lb {
+      font-family: var(--font-mono); font-size: 8px; padding: 0 6px; height: 26px; flex-shrink: 0;
+      color: var(--text); background: transparent; border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 4px;
+      cursor: pointer; transition: all 0.15s;
+    }
+    .lb:hover { color: var(--cyan); border-color: var(--cyan); }
+    .lb.locked { color: var(--gold); border-color: var(--gold); background: rgba(251, 191, 36, 0.12); }
+    .rm-btn {
+      font-family: var(--font-mono); font-size: 16px; line-height: 1; width: 26px; height: 26px; flex-shrink: 0;
+      color: var(--text); background: transparent; border: 1px solid rgba(56, 189, 248, 0.2); border-radius: 4px;
+      cursor: pointer; display: flex; align-items: center; justify-content: center; padding: 0;
+    }
+    .rm-btn:not(:disabled):hover { color: var(--magenta); border-color: var(--magenta); }
+    .rm-btn:disabled { opacity: 0.2; cursor: default; }
+    .stop-pos-row { display: flex; align-items: center; gap: 6px; }
+    .stop-pos-row input[type=range] { height: 20px; flex: 1; }
+    .stop-pos-val { font-family: var(--font-mono); font-size: 9px; color: var(--val); width: 28px; text-align: right; flex-shrink: 0; }
+    .pos-fixed { font-family: var(--font-mono); font-size: 9px; color: var(--dim); opacity: 0.6; flex: 1; }
+    .grad-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 6px; }
+
+    /* ── OSCILLOSCOPE ───────────────────────── */
+    #oscCanvas {
+      width: 100%; height: 48px; display: block;
+      background: rgba(2, 4, 12, 0.95); border: 1px solid var(--border);
+      border-radius: 6px; margin-bottom: 10px;
+    }
+
+    /* ── PANEL BUTTONS ──────────────────────── */
+    .pbtn {
+      display: block; width: 100%; min-height: 36px; padding: 8px; margin-bottom: 6px;
+      font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.12em;
+      color: var(--text); background: transparent; border: 1px solid var(--border); border-radius: 6px;
+      cursor: pointer; text-align: center; transition: all 0.15s;
+    }
+    .pbtn:hover, .pbtn:active { color: var(--cyan); border-color: var(--cyan); background: rgba(56, 189, 248, 0.1); }
+    .pbtn.active { color: var(--cyan); border-color: var(--cyan); background: rgba(56, 189, 248, 0.18); }
+    .pbtn.phos   { color: var(--frost); border-color: rgba(224, 242, 254, 0.3); }
+    .pbtn.phos:hover { background: rgba(224, 242, 254, 0.1); border-color: var(--frost); }
+    .pbtn.danger { color: var(--magenta); border-color: rgba(244, 63, 94, 0.35); }
+    .pbtn.danger:hover { background: rgba(244, 63, 94, 0.12); border-color: var(--magenta); }
+    .pbtn.small  { min-height: 30px; font-size: 9px; padding: 4px; margin-bottom: 0; }
+    .pbtn:disabled { opacity: 0.35; cursor: default; }
+
+    .crystal {
+      height: 1px; margin: 12px 0;
+      background: linear-gradient(90deg, transparent, var(--cyan), var(--gold), transparent);
+      opacity: 0.25;
+    }
+
+    .kr { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
+    .kb { font-family: var(--font-mono); font-size: 9px; color: var(--cyan); background: rgba(56, 189, 248, 0.12); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 4px; padding: 2px 6px; min-width: 28px; text-align: center; flex-shrink: 0; }
+    .kd { font-size: 10px; color: var(--dim); }
+
+    body.dark-ui #topBar { opacity: 0; pointer-events: none; transform: translateY(-100%); }
+    body.dark-ui #panel  { opacity: 0; pointer-events: none; }
+    #revDot {
+      position: fixed; bottom: 16px; right: 16px;
+      padding: 6px 12px; border-radius: 20px;
+      font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.1em;
+      color: var(--cyan); background: rgba(6, 10, 22, 0.92); border: 1px solid var(--cyan);
+      z-index: 200; pointer-events: none; opacity: 0; transition: opacity 0.6s; cursor: pointer;
+      box-shadow: 0 0 14px rgba(56, 189, 248, 0.4);
+    }
+    body.dark-ui #revDot { opacity: 1; pointer-events: auto; animation: revPulse 3s ease-in-out infinite; }
+    @keyframes revPulse { 0%,100%{opacity:0.6}50%{opacity:1} }
+  </style>
+</head>
+<body>
+
+  <canvas id="glCanvas"></canvas>
+
+  <!-- UPLOAD DROP ZONE -->
+  <div id="dropZone" class="hidden">
+    <div id="dropInner">
+      <div id="dropIcon">◇</div>
+      <div id="dropTitle">BENZAITEN</div>
+      <div id="dropSub">drag image or video here · or click to browse</div>
+      <div id="dropHint">.jpg · .png · .webp · .gif · .mp4 · .webm</div>
+    </div>
+  </div>
+  <input type="file" id="fileInput"  accept="image/*" style="display:none">
+  <input type="file" id="videoInput" accept="video/*" style="display:none">
+
+  <!-- TOP BAR -->
+  <div id="topBar">
+    <div id="titleWrap">
+      <span id="statusOrb"></span>
+      <span id="titleText">BENZAITEN (弁財天)</span>
+    </div>
+    <div class="sep"></div>
+    <button id="audioBtn" class="tbtn phos">⬡ INIT AUDIO</button>
+    <button id="rxBtn" class="tbtn rx-on" style="display:none">⚡ REACTIVE</button>
+    <div id="vuWrap">
+      <span id="vuLabel">AMP</span>
+      <div id="vuMeter"><div id="vuFill"></div></div>
+    </div>
+    <span id="seismicWrap">SEI&nbsp;<span id="seismicVal">0.000</span></span>
+    <div class="spacer"></div>
+    <button id="freezeTopBtn" class="tbtn">⏸ FREEZE</button>
+    <div class="sep"></div>
+    <button id="darkBtn" class="tbtn warn">⊘ DARK</button>
+    <button id="fsBtn"   class="tbtn">⛶ FULLSCREEN</button>
+  </div>
+
+  <!-- RIGHT PANEL & DRAWER -->
+  <div id="panel">
+    <div id="panelScroll">
+
+      <!-- SUBSTRATE & MODE -->
+      <div class="sec">SUBSTRATE & MODE</div>
+      <div class="fit-group">
+        <button class="fit-btn mode-btn gold active" data-m="0">◈ COLOR FIELD</button>
+        <button class="fit-btn mode-btn"        data-m="1">🖼 MEDIA</button>
+        <button class="fit-btn mode-btn"        data-m="2">⯅ GRAD MAP</button>
+      </div>
+
+      <!-- MEDIA SUBSTRATE CONTROLS -->
+      <div id="mediaGroup" style="display:none">
+        <div class="source-row">
+          <button class="src-btn" id="srcImgBtn">↑ IMAGE</button>
+          <button class="src-btn" id="srcVidBtn">↑ VIDEO</button>
+          <button class="src-btn" id="srcCamBtn">⊙ CAM</button>
+        </div>
+        <div id="srcInfo" style="font-family:var(--font-mono);font-size:9px;color:var(--dim);letter-spacing:0.08em;margin-bottom:8px;display:none;"></div>
+        <div class="fit-group">
+          <button class="fit-btn active fit-mode-btn" data-mode="fill">FILL</button>
+          <button class="fit-btn fit-mode-btn"        data-mode="fit">FIT</button>
+          <button class="fit-btn fit-mode-btn"        data-mode="stretch">STRETCH</button>
+        </div>
+      </div>
+
+      <!-- GRADIENT & PALETTE CONTROLS -->
+      <div id="gradientGroup">
+        <div id="gradPrev"></div>
+        <div id="stopsList"></div>
+        <button id="addStopBtn" class="pbtn">+ ADD STOP</button>
+        <div class="grad-actions" style="margin-bottom:10px">
+          <button id="captureBtn" class="pbtn small" title="Snap free stops to current drifting color">⊕ CAPTURE</button>
+          <button id="freeAllBtn" class="pbtn small">◻ FREE ALL</button>
+          <button id="lockAllBtn" class="pbtn small">◼ LOCK ALL</button>
+          <button id="randBtn"    class="pbtn small danger">⁂ RANDOMIZE</button>
+        </div>
+        <div class="cr">
+          <div class="cl"><span class="cn">CHROMATIC FLUX</span><span class="cv" id="v-colorSpeed">1.00</span></div>
+          <input type="range" id="s-colorSpeed" min="0.01" max="4" step="0.05" value="1.0">
+        </div>
+        <div class="cr">
+          <div class="cl"><span class="cn">CHAOS FACTOR</span><span class="cv" id="v-speedVar">0.30</span></div>
+          <input type="range" id="s-speedVar" min="0" max="1" step="0.01" value="0.3">
+        </div>
+      </div>
+
+      <div class="crystal"></div>
+
+      <!-- FIELD & FLUID FLOW (ACTIVE WITHOUT AUDIO) -->
+      <div class="sec">FIELD & FLUID FLOW</div>
+      <div class="cr">
+        <div class="cl"><span class="cn">FLOW VELOCITY</span><span class="cv" id="v-baseSpd">0.100</span></div>
+        <input type="range" id="s-baseSpd" min="0" max="0.5" step="0.005" value="0.10">
+      </div>
+      <div class="cr">
+        <div class="cl"><span class="cn">FIELD DENSITY</span><span class="cv" id="v-noiseScale">2.5</span></div>
+        <input type="range" id="s-noiseScale" min="0.5" max="8" step="0.1" value="2.5">
+      </div>
+      <div class="cr">
+        <div class="cl"><span class="cn">DISTORTION</span><span class="cv" id="v-warpAmt">0.36</span></div>
+        <input type="range" id="s-warpAmt" min="0" max="1" step="0.005" value="0.36">
+      </div>
+      <div class="cr">
+        <div class="cl"><span class="cn">CONVECTION RATE</span><span class="cv" id="v-warpSpd">0.020</span></div>
+        <input type="range" id="s-warpSpd" min="0" max="0.1" step="0.001" value="0.02">
+      </div>
+      <div class="cr">
+        <div class="cl"><span class="cn">SCALE VARIATION</span><span class="cv" id="v-warpScaleVar">UNIFORM</span></div>
+        <input type="range" id="s-warpScaleVar" min="0" max="1" step="0.02" value="0">
+      </div>
+      <div class="cr">
+        <div class="cl"><span class="cn">DRIFT VELOCITY</span><span class="cv" id="v-scrollSpd">0.40</span></div>
+        <input type="range" id="s-scrollSpd" min="0" max="2" step="0.05" value="0.4">
+      </div>
+      <div class="cr">
+        <div class="cl"><span class="cn">DRIFT RANGE</span><span class="cv" id="v-scrollMag">1.5</span></div>
+        <input type="range" id="s-scrollMag" min="0" max="4" step="0.1" value="1.5">
+      </div>
+
+      <div class="crystal"></div>
+
+      <!-- TRANSFORM -->
+      <div class="sec">TRANSFORM</div>
+      <div style="display:flex;gap:4px;margin-bottom:8px;">
+        <button class="edge-btn" id="flipHBtn">↔ FLIP H</button>
+        <button class="edge-btn" id="flipVBtn">↕ FLIP V</button>
+      </div>
+      <div class="cr">
+        <div class="cl"><span class="cn">ROTATION</span><span class="cv" id="v-rotate">0°</span></div>
+        <input type="range" id="s-rotate" min="0" max="360" step="1" value="0">
+      </div>
+      <div style="display:flex;gap:4px;">
+        <button class="edge-btn" id="rotateCCW">⟲ −90°</button>
+        <button class="edge-btn" id="rotateCW">+90° ⟳</button>
+        <button class="edge-btn" id="rotateReset">0°</button>
+      </div>
+
+      <div class="crystal"></div>
+
+      <!-- LATTICE -->
+      <div class="sec">LATTICE</div>
+      <button id="tileBtn" class="pbtn">◻ TILING: OFF</button>
+      <div class="cr" id="tileScaleRow">
+        <div class="cl"><span class="cn">ZOOM / TILE</span><span class="cv" id="v-tileScale">1.0×</span></div>
+        <input type="range" id="s-tileScale" class="dimmed" min="0.1" max="8" step="0.05" value="1" disabled>
+      </div>
+      <div id="tileEdgeGroup" style="display:none">
+        <div class="cl" style="margin-bottom:6px"><span class="cn">TILE EDGE</span></div>
+        <div class="edge-group">
+          <button class="edge-btn active tile-edge-btn" data-edge="hard">HARD</button>
+          <button class="edge-btn tile-edge-btn"        data-edge="fade">FADE</button>
+          <button class="edge-btn tile-edge-btn"        data-edge="mirror">MIRROR</button>
+        </div>
+        <div class="cr" id="edgeBlendRow" style="display:none">
+          <div class="cl"><span class="cn">EDGE BLEND</span><span class="cv" id="v-tileBlend">0.50</span></div>
+          <input type="range" id="s-tileBlend" min="0" max="1" step="0.01" value="0.5">
+        </div>
+      </div>
+
+      <div class="crystal"></div>
+
+      <!-- OPTICS & SPECTRUM -->
+      <div class="sec">OPTICS & SPECTRUM</div>
+      <div class="cr">
+        <div class="cl"><span class="cn">LENS WARP</span><span class="cv" id="v-lens">0.000</span></div>
+        <input type="range" id="s-lens" min="-0.8" max="0.8" step="0.01" value="0">
+      </div>
+      <div class="cr">
+        <div class="cl"><span class="cn">ABERRATION</span><span class="cv" id="v-chroma">0.000</span></div>
+        <input type="range" id="s-chroma" min="0" max="1" step="0.01" value="0">
+      </div>
+      <div class="cr">
+        <div class="cl"><span class="cn">HUE SHIFT</span><span class="cv" id="v-hue">0.000</span></div>
+        <input type="range" id="s-hue" min="0" max="1" step="0.005" value="0">
+      </div>
+      <div class="cr">
+        <div class="cl"><span class="cn">SATURATION</span><span class="cv" id="v-sat">1.00</span></div>
+        <input type="range" id="s-sat" min="0" max="2.5" step="0.05" value="1">
+      </div>
+      <div class="cr">
+        <div class="cl"><span class="cn">BRIGHTNESS</span><span class="cv" id="v-bright">1.00</span></div>
+        <input type="range" id="s-bright" min="0.1" max="2.5" step="0.05" value="1">
+      </div>
+      <div class="cr">
+        <div class="cl"><span class="cn">VIGNETTE</span><span class="cv" id="v-vignette">1.00</span></div>
+        <input type="range" id="s-vignette" min="0" max="3" step="0.05" value="1">
+      </div>
+
+      <div class="crystal"></div>
+
+      <!-- RESONANCE (AUDIO SURGE) -->
+      <div class="sec">AUDIO SURGES (RESONANCE)</div>
+      <p style="font-size:9px;color:var(--text);opacity:0.7;margin-bottom:8px;">Modulates flow velocity on live beat hits</p>
+      <button id="pAudioBtn" class="pbtn phos">⬡ INITIALIZE AUDIO</button>
+      <button id="pRxToggle" style="display:none">⚡ AUDIO REACTIVE: ON</button>
+      <canvas id="oscCanvas"></canvas>
+      <div class="cr">
+        <div class="cl"><span class="cn">SEISMIC GAIN</span><span class="cv" id="v-audioMult">8.0</span></div>
+        <input type="range" id="s-audioMult" min="0" max="20" step="0.5" value="8">
+      </div>
+      <div class="cr">
+        <div class="cl"><span class="cn">VISCOSITY</span><span class="cv" id="v-smoothing">0.85</span></div>
+        <input type="range" id="s-smoothing" min="0" max="0.99" step="0.01" value="0.85">
+      </div>
+
+      <div class="crystal"></div>
+
+      <!-- PRESETS & SYSTEM -->
+      <div class="sec">PRESETS & SYSTEM</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px">
+        <button class="pbtn preset active" data-p="default">◼ DEFAULT</button>
+        <button class="pbtn preset"        data-p="molten">◻ MOLTEN</button>
+        <button class="pbtn preset"        data-p="abyssal">◻ ABYSSAL</button>
+        <button class="pbtn preset"        data-p="fracture">◻ FRACTURE</button>
+      </div>
+      <button id="pFreezeBtn" class="pbtn">⏸ FREEZE</button>
+      <button id="resetBtn"   class="pbtn danger">↺ RESET DEFAULTS</button>
+
+      <div class="crystal"></div>
+
+      <!-- KEYS & TOUCH -->
+      <div class="sec">KEYS & TOUCH</div>
+      <div class="kr"><span class="kb">DRAG</span><span class="kd">stir fluid velocity field</span></div>
+      <div class="kr"><span class="kb">H</span><span class="kd">toggle panel</span></div>
+      <div class="kr"><span class="kb">F</span><span class="kd">fullscreen</span></div>
+      <div class="kr"><span class="kb">U</span><span class="kd">hide all UI</span></div>
+      <div class="kr"><span class="kb">A</span><span class="kd">toggle reactive</span></div>
+      <div class="kr"><span class="kb">SPC</span><span class="kd">freeze / resume</span></div>
+      <div class="kr"><span class="kb">O</span><span class="kd">open media</span></div>
+
+    </div>
+    <div id="panelTab" title="Toggle panel (H)"><span id="tabIcon">◀</span><span id="tabLbl">CONTROLS</span></div>
+  </div>
+
+  <div id="revDot" title="Click or tap to restore UI">◈ SHOW UI (U)</div>
+
+  <!-- SHADERS -->
+  <script id="vertex-shader" type="x-shader/x-vertex">
+    attribute vec4 a_position;
+    void main() { gl_Position = a_position; }
+  </script>
+
+  <script id="fragment-shader" type="x-shader/x-fragment">
+    precision mediump float;
+
+    uniform sampler2D u_image;
+    uniform vec2  u_resolution;
+    uniform vec2  u_scroll_offset;
+    uniform vec2  u_touch_offset;
+    uniform float u_noise_scale;
+    uniform float u_warp_amount;
+    uniform float u_warp_speed;
+    uniform float u_warp_scale_var;
+    uniform float u_tile_scale;
+    uniform float u_tile_enabled;
+    uniform vec2  u_tile_pan;
+    uniform float u_tile_mode;     /* 0=hard, 1=fade, 2=mirror */
+    uniform float u_tile_blend;
+    uniform float u_lens_amount;
+    uniform float u_chroma;
+    uniform float u_hue_shift;
+    uniform float u_saturation;
+    uniform float u_brightness;
+    uniform float u_vignette;
+    uniform vec2  u_uv_scale;
+    uniform float u_audio_pulse;
+    uniform float u_rotate;
+    uniform vec2  u_flip;
+
+    /* Mode & Procedural Gradient uniforms */
+    uniform float u_mode;          /* 0=gradient, 1=media, 2=gradient map */
+    uniform vec3  u_stop_col[8];
+    uniform float u_stop_pos[8];
+    uniform float u_stop_count;
+
+    vec3 rgb2hsv(vec3 c){vec4 K=vec4(0.,-1./3.,2./3.,-1.);vec4 p=mix(vec4(c.bg,K.wz),vec4(c.gb,K.xy),step(c.b,c.g));vec4 q=mix(vec4(p.xyw,c.r),vec4(c.r,p.yzx),step(p.x,c.r));float d=q.x-min(q.w,q.y);float e=1e-10;return vec3(abs(q.z+(q.w-q.y)/(6.*d+e)),d/(q.x+e),q.x);}
+    vec3 hsv2rgb(vec3 c){vec4 K=vec4(1.,2./3.,1./3.,3.);vec3 p=abs(fract(c.xxx+K.xyz)*6.-K.www);return c.z*mix(K.xxx,clamp(p-K.xxx,0.,1.),c.y);}
+    vec2 hash(vec2 p){p=vec2(dot(p,vec2(127.1,311.7)),dot(p,vec2(269.5,183.3)));return-1.+2.*fract(sin(p)*43758.5453123);}
+    float noise(in vec2 p){const float K1=.366025404,K2=.211324865;vec2 i=floor(p+(p.x+p.y)*K1);vec2 a=p-i+(i.x+i.y)*K2;vec2 o=(a.x>a.y)?vec2(1.,0.):vec2(0.,1.);vec2 b=a-o+K2;vec2 c=a-1.+2.*K2;vec3 h=max(.5-vec3(dot(a,a),dot(b,b),dot(c,c)),0.);vec3 n=h*h*h*h*vec3(dot(a,hash(i+0.)),dot(b,hash(i+o)),dot(c,hash(i+1.)));return dot(n,vec3(70.));}
+
+    vec3 blendSeg(vec3 col, float nv, float minCount,
+                  vec3 cA, vec3 cB, float pA, float pB) {
+      float active  = step(minCount, u_stop_count + 0.5);
+      float inRange = step(pA, nv) * step(nv, pB);
+      float t       = clamp((nv - pA) / max(pB - pA, 0.0001), 0.0, 1.0);
+      return mix(col, mix(cA, cB, smoothstep(0.0, 1.0, t)), active * inRange);
+    }
+
+    vec3 evalGradient(float nv) {
+      vec3 col = u_stop_col[0];
+      col = blendSeg(col,nv,2., u_stop_col[0],u_stop_col[1],u_stop_pos[0],u_stop_pos[1]);
+      col = blendSeg(col,nv,3., u_stop_col[1],u_stop_col[2],u_stop_pos[1],u_stop_pos[2]);
+      col = blendSeg(col,nv,4., u_stop_col[2],u_stop_col[3],u_stop_pos[2],u_stop_pos[3]);
+      col = blendSeg(col,nv,5., u_stop_col[3],u_stop_col[4],u_stop_pos[3],u_stop_pos[4]);
+      col = blendSeg(col,nv,6., u_stop_col[4],u_stop_col[5],u_stop_pos[4],u_stop_pos[5]);
+      col = blendSeg(col,nv,7., u_stop_col[5],u_stop_col[6],u_stop_pos[5],u_stop_pos[6]);
+      col = blendSeg(col,nv,8., u_stop_col[6],u_stop_col[7],u_stop_pos[6],u_stop_pos[7]);
+      return col;
+    }
+
+    void main() {
+      vec2 uv = gl_FragCoord.xy / u_resolution.xy;
+
+      /* 1. Lens distortion */
+      vec2 lc  = uv - 0.5;
+      float r2 = dot(lc, lc);
+      vec2 lensUV = lc * (1.0 + u_lens_amount * r2) + 0.5;
+
+      /* 2. Noise & Touch Fluid warp */
+      vec2 sc = u_scroll_offset + u_touch_offset;
+      vec2 shift = sc * u_warp_speed;
+      vec2 p0 = lensUV * u_noise_scale * 0.5 + shift;
+      vec2 wo0 = vec2(noise(p0), noise(p0 + 10.0));
+
+      vec2 wo;
+      if (u_warp_scale_var > 0.001) {
+        vec2 pFine = lensUV * (u_noise_scale * 1.4) + shift * 1.5;
+        vec2 pMask = lensUV * (u_noise_scale * 0.2) + shift * 0.4;
+        vec2 woFine = vec2(noise(pFine), noise(pFine + 15.0));
+        float pocketMask = smoothstep(0.25, 0.75, noise(pMask + 25.0) * 0.5 + 0.5);
+        vec2 woMulti = mix(wo0, wo0 * 0.4 + woFine * (0.3 + 0.7 * pocketMask), u_warp_scale_var);
+        wo = woMulti;
+      } else {
+        wo = wo0;
+      }
+      vec2 warpedUV = lensUV + wo * (u_warp_amount + u_audio_pulse * 0.12);
+
+      /* Audio zoom pulse */
+      float zoom = 1.0 - u_audio_pulse * 0.035;
+      warpedUV = (warpedUV - 0.5) * zoom + 0.5;
+
+      /* Flip & rotation */
+      if (u_flip.x > 0.5) warpedUV.x = 1.0 - warpedUV.x;
+      if (u_flip.y > 0.5) warpedUV.y = 1.0 - warpedUV.y;
+      {
+        float cosA = cos(u_rotate);
+        float sinA = sin(u_rotate);
+        vec2  c    = warpedUV - 0.5;
+        warpedUV   = vec2(c.x*cosA - c.y*sinA, c.x*sinA + c.y*cosA) + 0.5;
+      }
+
+      vec3 col;
+
+      if (u_mode < 0.5) {
+        /* Mode 0: Procedural Color Field (Benzaiten Launch Default) */
+        float nv = (noise(warpedUV * u_noise_scale + u_scroll_offset + u_touch_offset) + 1.0) * 0.5;
+        col = evalGradient(nv);
+      } else {
+        /* Sample texture (Tiled or Non-Tiled) */
+        vec2 sampleUV;
+        float tileVig = 1.0;
+
+        if (u_tile_enabled > 0.5) {
+          vec2 tileCoord = warpedUV * u_tile_scale + u_tile_pan;
+          if (u_tile_mode > 1.5) {
+            sampleUV = 1.0 - abs(2.0 * fract(tileCoord * 0.5) - 1.0);
+          } else {
+            sampleUV = fract(tileCoord);
+            if (u_tile_mode > 0.5) {
+              vec2 dist2edge = min(sampleUV, 1.0 - sampleUV);
+              float nearEdge  = min(dist2edge.x, dist2edge.y);
+              tileVig = smoothstep(0.0, max(u_tile_blend * 0.5, 0.001), nearEdge);
+            }
+          }
+        } else {
+          sampleUV = (warpedUV - 0.5) * u_uv_scale + 0.5;
+          if (u_tile_scale < 1.0) {
+            sampleUV = (sampleUV - 0.5) * u_tile_scale + 0.5;
+          }
+        }
+
+        vec2 ab = (sampleUV - 0.5) * u_chroma * 0.07;
+        vec2 safeUV = clamp(sampleUV, 0.001, 0.999);
+        vec2 safeR  = clamp(sampleUV + ab, 0.001, 0.999);
+        vec2 safeB  = clamp(sampleUV - ab, 0.001, 0.999);
+
+        float r = texture2D(u_image, safeR).r;
+        float g = texture2D(u_image, safeUV).g;
+        float b = texture2D(u_image, safeB).b;
+        vec3 texCol = vec3(r, g, b);
+
+        if (u_tile_enabled < 0.5) {
+          float inB = step(0.,sampleUV.x)*step(sampleUV.x,1.)*step(0.,sampleUV.y)*step(sampleUV.y,1.);
+          texCol *= inB;
+        } else {
+          texCol *= tileVig;
+        }
+
+        if (u_mode > 1.5) {
+          /* Mode 2: Hybrid Gradient Map */
+          float nv = (noise(warpedUV * u_noise_scale + u_scroll_offset + u_touch_offset) + 1.0) * 0.5;
+          float lum = dot(texCol, vec3(0.299, 0.587, 0.114));
+          /* Dynamically cycle gradient ramp through image contours + fluid noise drift */
+          float gradVal = fract(lum + nv * 0.5);
+          col = evalGradient(gradVal);
+        } else {
+          /* Mode 1: Media Substrate */
+          col = texCol;
+        }
+      }
+
+      /* HSV & Optics post-processing */
+      vec3 hsv = rgb2hsv(col);
+      hsv.x = fract(hsv.x + u_hue_shift);
+      hsv.y = clamp(hsv.y * u_saturation, 0.0, 1.0);
+      hsv.z = clamp(hsv.z * u_brightness, 0.0, 1.0);
+      col   = hsv2rgb(hsv);
+
+      float dist = length(uv - 0.5) * 1.6;
+      col *= 1.0 - smoothstep(0.4, 1.0, dist * u_vignette * 0.6);
+
+      gl_FragColor = vec4(col, 1.0);
+    }
+  </script>
+
+  <script>
+  /* ── SimplexNoise ──────────────────────────────────────────────────────── */
+  (function(){"use strict";var F2=0.5*(Math.sqrt(3)-1),G2=(3-Math.sqrt(3))/6;function SimplexNoise(r){if(!r)r=Math.random;this.p=new Uint8Array(256);this.perm=new Uint8Array(512);this.permMod12=new Uint8Array(512);for(var i=0;i<256;i++)this.p[i]=i;for(var i=0;i<255;i++){var k=i+~~(r()*(256-i)),a=this.p[i];this.p[i]=this.p[k];this.p[k]=a}for(var i=0;i<512;i++){this.perm[i]=this.p[i&255];this.permMod12[i]=this.perm[i]%12}this.grad3=new Float32Array([1,1,0,-1,1,0,1,-1,0,-1,-1,0,1,0,1,-1,0,1,1,0,-1,-1,0,-1,0,1,1,0,-1,1,0,1,-1,0,-1,-1])}SimplexNoise.prototype={noise:function(x,y){var n0,n1,n2,s=(x+y)*F2,i=Math.floor(x+s),j=Math.floor(y+s),t=(i+j)*G2,x0=x-(i-t),y0=y-(j-t),i1,j1;if(x0>y0){i1=1;j1=0}else{i1=0;j1=1}var x1=x0-i1+G2,y1=y0-j1+G2,x2=x0-1+2*G2,y2=y0-1+2*G2,ii=i&255,jj=j&255,gi0=this.permMod12[ii+this.perm[jj]],gi1=this.permMod12[ii+i1+this.perm[jj+j1]],gi2=this.permMod12[ii+1+this.perm[jj+1]],t0=0.5-x0*x0-y0*y0;if(t0<0)n0=0;else{t0*=t0;n0=t0*t0*this.dot(this.grad3,gi0,x0,y0)}var t1=0.5-x1*x1-y1*y1;if(t1<0)n1=0;else{t1*=t1;n1=t1*t1*this.dot(this.grad3,gi1,x1,y1)}var t2=0.5-x2*x2-y2*y2;if(t2<0)n2=0;else{t2*=t2;n2=t2*t2*this.dot(this.grad3,gi2,x2,y2)}return 70*(n0+n1+n2)},dot:function(g,gi,x,y){return g[gi]*x+g[gi+1]*y}};window.SimplexNoise=SimplexNoise})();
+
+  /* ── WebGL setup ────────────────────────────────────────────────────────── */
+  const canvas = document.getElementById('glCanvas');
+  const gl     = canvas.getContext('webgl');
+  if (!gl) alert('WebGL not supported!');
+
+  const MAX_STOPS = 8;
+
+  function mkShader(type, src) {
+    const s = gl.createShader(type); gl.shaderSource(s,src); gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) { console.error(gl.getShaderInfoLog(s)); return null; }
+    return s;
+  }
+  const prog = (() => {
+    const p = gl.createProgram();
+    gl.attachShader(p, mkShader(gl.VERTEX_SHADER,   document.getElementById('vertex-shader').text));
+    gl.attachShader(p, mkShader(gl.FRAGMENT_SHADER, document.getElementById('fragment-shader').text));
+    gl.linkProgram(p);
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) { console.error(gl.getProgramInfoLog(p)); return null; }
+    return p;
+  })();
+
+  const aPos         = gl.getAttribLocation(prog,  'a_position');
+  const uRes         = gl.getUniformLocation(prog, 'u_resolution');
+  const uScr         = gl.getUniformLocation(prog, 'u_scroll_offset');
+  const uTouch       = gl.getUniformLocation(prog, 'u_touch_offset');
+  const uNSc         = gl.getUniformLocation(prog, 'u_noise_scale');
+  const uWAm         = gl.getUniformLocation(prog, 'u_warp_amount');
+  const uWSp         = gl.getUniformLocation(prog, 'u_warp_speed');
+  const uWarpScaleVar= gl.getUniformLocation(prog, 'u_warp_scale_var');
+  const uTileScale   = gl.getUniformLocation(prog, 'u_tile_scale');
+  const uTileOn      = gl.getUniformLocation(prog, 'u_tile_enabled');
+  const uTilePan     = gl.getUniformLocation(prog, 'u_tile_pan');
+  const uTileMode    = gl.getUniformLocation(prog, 'u_tile_mode');
+  const uTileBlend   = gl.getUniformLocation(prog, 'u_tile_blend');
+  const uLens        = gl.getUniformLocation(prog, 'u_lens_amount');
+  const uChroma      = gl.getUniformLocation(prog, 'u_chroma');
+  const uHue         = gl.getUniformLocation(prog, 'u_hue_shift');
+  const uSat         = gl.getUniformLocation(prog, 'u_saturation');
+  const uBright      = gl.getUniformLocation(prog, 'u_brightness');
+  const uVig         = gl.getUniformLocation(prog, 'u_vignette');
+  const uUVScale     = gl.getUniformLocation(prog, 'u_uv_scale');
+  const uPulse       = gl.getUniformLocation(prog, 'u_audio_pulse');
+  const uImage       = gl.getUniformLocation(prog, 'u_image');
+  const uRotate      = gl.getUniformLocation(prog, 'u_rotate');
+  const uFlip        = gl.getUniformLocation(prog, 'u_flip');
+
+  const uMode        = gl.getUniformLocation(prog, 'u_mode');
+  const uStopCol     = gl.getUniformLocation(prog, 'u_stop_col[0]');
+  const uStopPos     = gl.getUniformLocation(prog, 'u_stop_pos[0]');
+  const uStopCount   = gl.getUniformLocation(prog, 'u_stop_count');
+
+  const vbuf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, vbuf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1,1,-1,-1,1,-1,1,1,-1,1,1]), gl.STATIC_DRAW);
+
+  const simplex = new SimplexNoise();
+
+  /* ── Texture + source management ───────────────────────────────────────── */
+  let texture = gl.createTexture();
+  let imgW = 1, imgH = 1;
+  let sourceType = 'none'; // 'image' | 'video' | 'webcam'
+
+  const videoEl = document.createElement('video');
+  videoEl.muted = true; videoEl.loop = true; videoEl.playsInline = true;
+  document.body.appendChild(videoEl);
+  let webcamStream = null;
+
+  function setTexParams() {
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  }
+
+  /* Default 1×1 neutral texture */
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([30,40,55,255]));
+  setTexParams();
+
+  function setSrcInfo(text) {
+    const el = document.getElementById('srcInfo');
+    el.textContent = text; el.style.display = text ? '' : 'none';
+  }
+
+  function onSourceActive() {
+    document.getElementById('dropZone').classList.add('hidden');
+  }
+
+  function uploadImage(img) {
+    imgW = img.width; imgH = img.height;
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
+    setTexParams();
+    sourceType = 'image';
+    updateUVScale();
+    setSrcInfo(`${imgW} × ${imgH} px`);
+    onSourceActive();
+  }
+
+  function loadFile(file) {
+    if (!file) return;
+    if (file.type.startsWith('image/')) {
+      const reader = new FileReader();
+      reader.onload = e => {
+        const img = new Image();
+        img.onload = () => uploadImage(img);
+        img.src = e.target.result;
+      };
+      reader.readAsDataURL(file);
+    } else if (file.type.startsWith('video/')) {
+      if (webcamStream) { webcamStream.getTracks().forEach(t => t.stop()); webcamStream = null; }
+      videoEl.srcObject = null;
+      videoEl.src = URL.createObjectURL(file);
+      videoEl.onloadedmetadata = () => {
+        imgW = videoEl.videoWidth; imgH = videoEl.videoHeight;
+        videoEl.play();
+        sourceType = 'video';
+        updateUVScale();
+        setSrcInfo(`video ${imgW} × ${imgH}`);
+        onSourceActive();
+      };
+    }
+  }
+
+  const dropZone   = document.getElementById('dropZone');
+  const fileInput  = document.getElementById('fileInput');
+  const videoInput = document.getElementById('videoInput');
+
+  dropZone.addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', e => loadFile(e.target.files[0]));
+  videoInput.addEventListener('change', e => loadFile(e.target.files[0]));
+
+  window.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.remove('hidden'); dropZone.classList.add('drag-over'); });
+  window.addEventListener('dragleave', e => { if (e.relatedTarget === null) dropZone.classList.remove('drag-over'); });
+  window.addEventListener('drop', e => {
+    e.preventDefault(); dropZone.classList.remove('drag-over');
+    if (e.dataTransfer.files.length) loadFile(e.dataTransfer.files[0]);
+  });
+
+  document.getElementById('srcImgBtn').addEventListener('click', () => fileInput.click());
+  document.getElementById('srcVidBtn').addEventListener('click', () => videoInput.click());
+  document.getElementById('srcCamBtn').addEventListener('click', async () => {
+    try {
+      if (webcamStream) { webcamStream.getTracks().forEach(t => t.stop()); }
+      webcamStream = await navigator.mediaDevices.getUserMedia({ video: true });
+      videoEl.src = '';
+      videoEl.srcObject = webcamStream;
+      videoEl.onloadedmetadata = () => {
+        imgW = videoEl.videoWidth; imgH = videoEl.videoHeight;
+        videoEl.play();
+        sourceType = 'webcam';
+        updateUVScale();
+        setSrcInfo(`cam ${imgW} × ${imgH}`);
+        onSourceActive();
+      };
+    } catch (e) { alert('Webcam access denied or unavailable.'); }
+  });
+
+  /* ── Mouse / Touch Interactive Fluid Stirring ──────────────────────────── */
+  let touchOffset = [0, 0];
+  let isDragging = false;
+  let lastTouch = [0, 0];
+
+  function onPointerDown(px, py) {
+    if (event && (event.target.closest('#panel') || event.target.closest('#topBar'))) return;
+    isDragging = true;
+    lastTouch = [px, py];
+  }
+
+  function onPointerMove(px, py) {
+    if (!isDragging) return;
+    const dx = (px - lastTouch[0]) * 0.005;
+    const dy = (py - lastTouch[1]) * 0.005;
+    touchOffset[0] += dx;
+    touchOffset[1] += dy;
+    lastTouch = [px, py];
+  }
+
+  function onPointerUp() { isDragging = false; }
+
+  window.addEventListener('mousedown', e => onPointerDown(e.clientX, e.clientY));
+  window.addEventListener('mousemove', e => onPointerMove(e.clientX, e.clientY));
+  window.addEventListener('mouseup',   onPointerUp);
+
+  window.addEventListener('touchstart', e => {
+    if (e.touches.length === 1) onPointerDown(e.touches[0].clientX, e.touches[0].clientY);
+  }, { passive: true });
+
+  window.addEventListener('touchmove', e => {
+    if (e.touches.length === 1) onPointerMove(e.touches[0].clientX, e.touches[0].clientY);
+  }, { passive: true });
+
+  window.addEventListener('touchend', onPointerUp);
+
+  /* ── Fit & Aspect Ratio ─────────────────────────────────────────────────── */
+  let fitMode = 'fill';
+  let uvScale = [1, 1];
+
+  function updateUVScale() {
+    const cW = canvas.width || window.innerWidth;
+    const cH = canvas.height || window.innerHeight;
+    const canvasAspect = cW / cH;
+    const imgAspect    = imgW / imgH;
+
+    if (fitMode === 'stretch') { uvScale = [1, 1]; return; }
+    if (fitMode === 'fill') {
+      if (canvasAspect > imgAspect) uvScale = [1, imgAspect / canvasAspect];
+      else                          uvScale = [canvasAspect / imgAspect, 1];
+    } else { // 'fit'
+      if (canvasAspect > imgAspect) uvScale = [imgAspect / canvasAspect, 1];
+      else                          uvScale = [1, canvasAspect / imgAspect];
+    }
+  }
+
+  document.querySelectorAll('.fit-mode-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.fit-mode-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      fitMode = btn.dataset.mode;
+      updateUVScale();
+    });
+  });
+
+  window.addEventListener('resize', updateUVScale);
+
+  /* ── Parameters ─────────────────────────────────────────────────────────── */
+  const DEFAULTS = {
+    mode:0, // 0=Gradient/Color Field (Launch Default), 1=Media, 2=Gradient Map
+    noiseScale:2.5, warpAmt:0.36, warpSpd:0.02, warpScaleVar:0.0,
+    scrollSpd:0.4, scrollMag:1.5,
+    tileScale:1.0, tileEnabled:false, tileMode:0, tileBlend:0.5,
+    rotate:0, flipX:false, flipY:false,
+    lens:0, chroma:0,
+    hue:0, sat:1, bright:1, vignette:1,
+    baseSpd:0.10, // Active default baseline motion without needing audio!
+    audioMult:8, smoothing:0.85,
+    colorSpeed:1.0, speedVar:0.3,
+  };
+
+  const PRESETS = {
+    default:  {...DEFAULTS},
+    molten:   {mode:0, baseSpd:0.15, audioMult:20, smoothing:0.70, noiseScale:3.5, scrollSpd:0.4, scrollMag:3.0, warpAmt:0.70, warpSpd:0.05, warpScaleVar:0.35, colorSpeed:2.0, speedVar:0.4},
+    abyssal:  {mode:0, baseSpd:0.04, audioMult:5,  smoothing:0.95, noiseScale:1.5, scrollSpd:0.1, scrollMag:1.0, warpAmt:0.15, warpSpd:0.005,warpScaleVar:0.0,  colorSpeed:0.3, speedVar:0.1},
+    fracture: {mode:0, baseSpd:0.12, audioMult:18, smoothing:0.60, noiseScale:6.0, scrollSpd:0.6, scrollMag:4.0, warpAmt:0.80, warpSpd:0.08, warpScaleVar:0.75, colorSpeed:3.0, speedVar:0.9},
+  };
+
+  let P = {...DEFAULTS};
+  const SAT_CHG_SPD  = 0.06;
+  const SPD_CHG_FREQ = 0.04;
+
+  /* ── Gradient Stop State ───────────────────────────────────────────────── */
+  let nextId = 0;
+  function createStop(pos, opts = {}) {
+    return {
+      id:         nextId++,
+      pos:        Math.max(0, Math.min(1, pos)),
+      prog:       opts.prog  !== undefined ? opts.prog : Math.random() * 10,
+      seed:       opts.seed  !== undefined ? opts.seed : Math.random() * 200,
+      speed:      opts.speed !== undefined ? opts.speed : 0.04 + Math.random() * 0.06,
+      locked:     opts.locked     || false,
+      fixedColor: opts.fixedColor || '#808080',
+    };
+  }
+
+  let stops = [
+    createStop(0.00, {prog:0,   seed:5,   speed:0.05}),
+    createStop(0.25, {prog:2.0, seed:35,  speed:0.07}),
+    createStop(0.50, {prog:4.0, seed:65,  speed:0.09}),
+    createStop(0.75, {prog:6.0, seed:95,  speed:0.06}),
+    createStop(1.00, {prog:8.0, seed:125, speed:0.08}),
+  ];
+
+  let actualCols = stops.map(() => [0.5,0.5,0.5]);
+
+  function hexToRgb01(hex) {
+    return [parseInt(hex.slice(1,3),16)/255, parseInt(hex.slice(3,5),16)/255, parseInt(hex.slice(5,7),16)/255];
+  }
+  function rgb01ToHex(r,g,b) {
+    return '#' + [r,g,b].map(v => Math.round(Math.min(1,Math.max(0,v))*255).toString(16).padStart(2,'0')).join('');
+  }
+
+  function updateGradientUI() {
+    const stops_css = actualCols.map((c,i) =>
+      `rgb(${c[0]*255|0},${c[1]*255|0},${c[2]*255|0}) ${(stops[i].pos*100).toFixed(1)}%`
+    ).join(', ');
+    document.getElementById('gradPrev').style.background = `linear-gradient(to right,${stops_css})`;
+
+    stops.forEach((stop, i) => {
+      const dot = document.getElementById('sd-' + stop.id);
+      if (dot) dot.style.background = `rgb(${actualCols[i][0]*255|0},${actualCols[i][1]*255|0},${actualCols[i][2]*255|0})`;
+    });
+  }
+
+  function rebuildStopUI() {
+    const container = document.getElementById('stopsList');
+    container.innerHTML = '';
+
+    stops.forEach((stop, i) => {
+      const isFirst  = i === 0;
+      const isLast   = i === stops.length - 1;
+      const canRm    = !isFirst && !isLast;
+
+      const card = document.createElement('div');
+      card.className = 'stop-card';
+
+      const top = document.createElement('div');
+      top.className = 'stop-top';
+      top.innerHTML = `
+        <span class="sr-lbl">C${i+1}</span>
+        <span class="sr-dot" id="sd-${stop.id}"></span>
+        <button class="lb${stop.locked?' locked':''}" id="lb-${stop.id}">${stop.locked?'LOCK':'AUTO'}</button>
+        <input type="color" class="cp" id="scp-${stop.id}" value="${stop.fixedColor}">
+        <button class="rm-btn" id="rm-${stop.id}" ${canRm?'':' disabled'}>−</button>
+      `;
+      card.appendChild(top);
+
+      const posRow = document.createElement('div');
+      posRow.className = 'stop-pos-row';
+
+      if (isFirst || isLast) {
+        posRow.innerHTML = `<span class="pos-fixed">${isFirst?'▸ ORIGIN (0.00)':'▸ TERMINUS (1.00)'}</span>`;
+      } else {
+        const prevPos = stops[i-1].pos + 0.005;
+        const nextPos = stops[i+1].pos - 0.005;
+        const pct = ((stop.pos - prevPos) / (nextPos - prevPos) * 100).toFixed(1);
+        posRow.innerHTML = `
+          <input type="range" class="sr-pos" id="sp-${stop.id}"
+            min="${prevPos.toFixed(3)}" max="${nextPos.toFixed(3)}"
+            step="0.005" value="${stop.pos.toFixed(3)}"
+            style="--pct:${pct}%">
+          <span class="stop-pos-val" id="spv-${stop.id}">${stop.pos.toFixed(2)}</span>
+        `;
+      }
+      card.appendChild(posRow);
+      container.appendChild(card);
+
+      document.getElementById('lb-' + stop.id).addEventListener('click', () => {
+        stop.locked = !stop.locked;
+        const b = document.getElementById('lb-' + stop.id);
+        b.textContent = stop.locked ? 'LOCK' : 'AUTO';
+        b.classList.toggle('locked', stop.locked);
+      });
+
+      document.getElementById('scp-' + stop.id).addEventListener('input', e => {
+        stop.fixedColor = e.target.value; stop.locked = true;
+        const b = document.getElementById('lb-' + stop.id);
+        b.textContent = 'LOCK'; b.classList.add('locked');
+      });
+
+      if (canRm) {
+        document.getElementById('rm-' + stop.id).addEventListener('click', () => {
+          stops.splice(i, 1); rebuildStopUI();
+        });
+      }
+
+      if (!isFirst && !isLast) {
+        document.getElementById('sp-' + stop.id).addEventListener('input', e => {
+          stop.pos = parseFloat(e.target.value);
+          document.getElementById('spv-' + stop.id).textContent = stop.pos.toFixed(2);
+          updateGradientUI();
+        });
+      }
+    });
+
+    document.getElementById('addStopBtn').disabled = stops.length >= MAX_STOPS;
+  }
+
+  document.getElementById('addStopBtn').addEventListener('click', () => {
+    if (stops.length >= MAX_STOPS) return;
+    let maxGap = 0, gapIdx = 0;
+    for (let i = 0; i < stops.length - 1; i++) {
+      const gap = stops[i+1].pos - stops[i].pos;
+      if (gap > maxGap) { maxGap = gap; gapIdx = i; }
+    }
+    const newPos = parseFloat(((stops[gapIdx].pos + stops[gapIdx+1].pos) / 2).toFixed(3));
+    stops.splice(gapIdx + 1, 0, createStop(newPos));
+    rebuildStopUI();
+  });
+
+  document.getElementById('captureBtn').addEventListener('click', () => {
+    stops.forEach((s,i) => { s.fixedColor = rgb01ToHex(...actualCols[i]); s.locked = true; });
+    rebuildStopUI();
+  });
+  document.getElementById('freeAllBtn').addEventListener('click', () => {
+    stops.forEach(s => s.locked = false); rebuildStopUI();
+  });
+  document.getElementById('lockAllBtn').addEventListener('click', () => {
+    stops.forEach((s,i) => { s.fixedColor = rgb01ToHex(...actualCols[i]); s.locked = true; });
+    rebuildStopUI();
+  });
+  document.getElementById('randBtn').addEventListener('click', () => {
+    stops.forEach(s => {
+      s.fixedColor = '#' + Math.floor(Math.random()*0xffffff).toString(16).padStart(6,'0');
+      s.locked = true;
+    });
+    rebuildStopUI();
+  });
+
+  /* ── Mode Switching ─────────────────────────────────────────────────────── */
+  function setMode(modeNum) {
+    P.mode = parseInt(modeNum);
+    document.querySelectorAll('.mode-btn').forEach(b => {
+      const active = parseInt(b.dataset.m) === P.mode;
+      b.classList.toggle('active', active);
+    });
+    document.getElementById('mediaGroup').style.display    = (P.mode === 1 || P.mode === 2) ? '' : 'none';
+    document.getElementById('gradientGroup').style.display = (P.mode === 0 || P.mode === 2) ? '' : 'none';
+  }
+
+  document.querySelectorAll('.mode-btn').forEach(b => {
+    b.addEventListener('click', () => setMode(b.dataset.m));
+  });
+
+  /* ── Slider binding ─────────────────────────────────────────────────────── */
+  const sliders = {};
+  function bindSlider(key, fmt) {
+    const el=document.getElementById('s-'+key), vEl=document.getElementById('v-'+key);
+    if (!el) return;
+    function refresh() {
+      const min=parseFloat(el.min),max=parseFloat(el.max),v=parseFloat(el.value);
+      el.style.setProperty('--pct',((v-min)/(max-min)*100).toFixed(1)+'%');
+      if (vEl) vEl.textContent = fmt ? fmt(v) : v.toFixed(2);
+      P[key] = v;
+    }
+    el.addEventListener('input', refresh); refresh();
+    sliders[key] = { set(v){ el.value=v; refresh(); } };
+  }
+
+  bindSlider('baseSpd',    v=>v.toFixed(3));
+  bindSlider('noiseScale', v=>v.toFixed(1));
+  bindSlider('warpAmt',    v=>v.toFixed(3));
+  bindSlider('warpSpd',    v=>v.toFixed(3));
+  bindSlider('warpScaleVar', v=>v === 0 ? 'UNIFORM' : (v*100).toFixed(0)+'%');
+  bindSlider('scrollSpd',  v=>v.toFixed(2));
+  bindSlider('scrollMag',  v=>v.toFixed(1));
+  bindSlider('tileScale',  v => v < 1 ? (1/v).toFixed(1)+'× zoom' : v.toFixed(1)+'×');
+  bindSlider('tileBlend',  v => v.toFixed(2));
+  bindSlider('rotate',     v => Math.round(v) + '°');
+  bindSlider('lens',       v => v===0?'0.000':(v>0?'+':'')+v.toFixed(3));
+  bindSlider('chroma',     v => v.toFixed(3));
+  bindSlider('hue',        v => v.toFixed(3));
+  bindSlider('sat',        v => v.toFixed(2));
+  bindSlider('bright',     v => v.toFixed(2));
+  bindSlider('vignette',   v => v.toFixed(2));
+  bindSlider('audioMult',  v => v.toFixed(1));
+  bindSlider('smoothing',  v => v.toFixed(2));
+  bindSlider('colorSpeed', v => v.toFixed(2));
+  bindSlider('speedVar',   v => v.toFixed(2));
+
+  function applyPreset(name) {
+    const pr = PRESETS[name]; if (!pr) return;
+    Object.keys(pr).forEach(k => { if (sliders[k]) sliders[k].set(pr[k]); else P[k] = pr[k]; });
+    setMode(P.mode);
+    document.querySelectorAll('.preset').forEach(b => {
+      const on = b.dataset.p === name;
+      b.classList.toggle('active', on);
+      b.textContent = (on ? '◼ ' : '◻ ') + b.dataset.p.toUpperCase();
+    });
+  }
+  document.querySelectorAll('.preset').forEach(b => b.addEventListener('click', () => applyPreset(b.dataset.p)));
+  document.getElementById('resetBtn').addEventListener('click', () => applyPreset('default'));
+
+  /* ── Flip, Rotate, Tiling UI ────────────────────────────────────────────── */
+  document.getElementById('flipHBtn').addEventListener('click', () => {
+    P.flipX = !P.flipX; document.getElementById('flipHBtn').classList.toggle('active', P.flipX);
+  });
+  document.getElementById('flipVBtn').addEventListener('click', () => {
+    P.flipY = !P.flipY; document.getElementById('flipVBtn').classList.toggle('active', P.flipY);
+  });
+  document.getElementById('rotateCCW').addEventListener('click', () => sliders['rotate'].set(((P.rotate - 90) % 360 + 360) % 360));
+  document.getElementById('rotateCW').addEventListener('click',  () => sliders['rotate'].set((P.rotate + 90) % 360));
+  document.getElementById('rotateReset').addEventListener('click',() => sliders['rotate'].set(0));
+
+  const tileBtn        = document.getElementById('tileBtn');
+  const tileScaleEl    = document.getElementById('s-tileScale');
+  const tileEdgeGroup  = document.getElementById('tileEdgeGroup');
+  const edgeBlendRow   = document.getElementById('edgeBlendRow');
+
+  tileBtn.addEventListener('click', () => {
+    P.tileEnabled = !P.tileEnabled;
+    tileBtn.textContent = P.tileEnabled ? '◼ TILING: ON' : '◻ TILING: OFF';
+    tileBtn.classList.toggle('active', P.tileEnabled);
+    tileScaleEl.classList.toggle('dimmed', !P.tileEnabled);
+    tileScaleEl.disabled = !P.tileEnabled;
+    tileEdgeGroup.style.display = P.tileEnabled ? '' : 'none';
+  });
+
+  document.querySelectorAll('.tile-edge-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.tile-edge-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      const m = btn.dataset.edge;
+      P.tileMode = m === 'hard' ? 0 : m === 'fade' ? 1 : 2;
+      edgeBlendRow.style.display = P.tileMode === 1 ? '' : 'none';
+    });
+  });
+
+  /* ── Oscilloscope & Web Audio ───────────────────────────────────────────── */
+  const oscC   = document.getElementById('oscCanvas');
+  const oscCtx = oscC.getContext('2d');
+  oscC.height  = 48;
+  let audioReady = false, audioEnabled = true, smoothAmp = 0;
+  let audioCtx, analyser, dataArray;
+
+  function drawOsc() {
+    const w = oscC.clientWidth || 220;
+    if (oscC.width !== w) oscC.width = w;
+    const h = oscC.height;
+    oscCtx.clearRect(0,0,w,h);
+    oscCtx.fillStyle = 'rgba(2,4,12,0.95)'; oscCtx.fillRect(0,0,w,h);
+    if (audioReady && dataArray) {
+      analyser.getByteFrequencyData(dataArray);
+      const bins = Math.floor(dataArray.length * 0.65), bw = w / bins;
+      for (let i=0;i<bins;i++) {
+        const t = dataArray[i]/255;
+        oscCtx.fillStyle = audioEnabled ? `rgba(56,189,248,${0.35+t*0.65})` : `rgba(51,65,85,${0.15+t*0.2})`;
+        oscCtx.fillRect(i*bw, h-t*h, Math.max(1,bw-0.5), t*h);
+      }
+      const ly = h*(1-Math.min(smoothAmp,1)*0.92);
+      oscCtx.strokeStyle = audioEnabled ? 'rgba(224,242,254,0.6)' : 'rgba(51,65,85,0.3)';
+      oscCtx.lineWidth=1; oscCtx.beginPath(); oscCtx.moveTo(0,ly); oscCtx.lineTo(w,ly); oscCtx.stroke();
+    } else {
+      oscCtx.strokeStyle='rgba(51,65,85,0.35)'; oscCtx.lineWidth=1; oscCtx.setLineDash([3,5]);
+      oscCtx.beginPath(); oscCtx.moveTo(0,h/2); oscCtx.lineTo(w,h/2); oscCtx.stroke();
+      oscCtx.setLineDash([]);
+      oscCtx.fillStyle='rgba(51,65,85,0.5)'; oscCtx.font='9px Share Tech Mono,monospace';
+      oscCtx.textAlign='center'; oscCtx.fillText('NO AUDIO SIGNAL',w/2,h/2-5);
+    }
+  }
+
+  async function initAudio() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      analyser = audioCtx.createAnalyser(); analyser.fftSize = 256;
+      audioCtx.createMediaStreamSource(stream).connect(analyser);
+      dataArray = new Uint8Array(analyser.frequencyBinCount);
+      audioReady = true;
+      document.getElementById('statusOrb').classList.add('live');
+      ['audioBtn','pAudioBtn'].forEach(id => {
+        const b = document.getElementById(id);
+        b.textContent = '⬡ AUDIO LIVE'; b.classList.remove('phos'); b.classList.add('done');
+        if (id === 'pAudioBtn') b.disabled = true;
+      });
+      document.getElementById('rxBtn').style.display = '';
+      document.getElementById('pRxToggle').style.display = '';
+    } catch (e) { alert('Microphone access required for audio reactivity.'); }
+  }
+  document.getElementById('audioBtn').addEventListener('click', initAudio);
+  document.getElementById('pAudioBtn').addEventListener('click', initAudio);
+
+  function setRxUI() {
+    const on = audioEnabled;
+    const rxBtn = document.getElementById('rxBtn');
+    rxBtn.className = 'tbtn ' + (on ? 'rx-on' : 'rx-off');
+    const pRx = document.getElementById('pRxToggle');
+    pRx.textContent = '⚡ AUDIO REACTIVE: ' + (on ? 'ON' : 'OFF');
+    pRx.className = on ? '' : 'off';
+  }
+  function toggleRx() { audioEnabled = !audioEnabled; setRxUI(); }
+  document.getElementById('rxBtn').addEventListener('click', toggleRx);
+  document.getElementById('pRxToggle').addEventListener('click', toggleRx);
+
+  /* ── Freeze / panel / dark / fullscreen ────────────────────────────────── */
+  let frozen = false, panelOpen = true, darkUI = false;
+
+  function setPanelTabUI() {
+    const isMobile = window.innerWidth <= 768;
+    const tabIcon = document.getElementById('tabIcon');
+    const tabLbl  = document.getElementById('tabLbl');
+    if (isMobile) {
+      tabIcon.textContent = panelOpen ? '▼' : '▲';
+      tabLbl.textContent  = panelOpen ? 'CLOSE CONTROLS' : 'OPEN CONTROLS';
+    } else {
+      tabIcon.textContent = panelOpen ? '◀' : '▶';
+      tabLbl.textContent  = panelOpen ? 'HIDE' : 'CONTROLS';
+    }
+  }
+
+  function togglePanel() {
+    panelOpen = !panelOpen;
+    document.getElementById('panel').classList.toggle('hidden', !panelOpen);
+    setPanelTabUI();
+  }
+  document.getElementById('panelTab').addEventListener('click', togglePanel);
+  window.addEventListener('resize', setPanelTabUI);
+
+  function toggleDark() {
+    darkUI = !darkUI;
+    document.body.classList.toggle('dark-ui', darkUI);
+    document.getElementById('darkBtn').classList.toggle('active', darkUI);
+  }
+  document.getElementById('darkBtn').addEventListener('click', toggleDark);
+  document.getElementById('revDot').addEventListener('click', toggleDark);
+
+  function toggleFS() {
+    if (!document.fullscreenElement) document.documentElement.requestFullscreen().catch(() => {});
+    else document.exitFullscreen();
+  }
+  document.getElementById('fsBtn').addEventListener('click', toggleFS);
+  document.addEventListener('fullscreenchange', () => {
+    const on = !!document.fullscreenElement;
+    document.getElementById('fsBtn').textContent = on ? '⊡ EXIT FULL' : '⛶ FULLSCREEN';
+    document.getElementById('fsBtn').classList.toggle('active', on);
+  });
+
+  document.addEventListener('keydown', e => {
+    if (e.target.tagName === 'INPUT') return;
+    switch (e.key.toLowerCase()) {
+      case 'h': togglePanel(); break;
+      case 'f': toggleFS(); break;
+      case 'u': toggleDark(); break;
+      case 'a': if (audioReady) toggleRx(); break;
+      case 'o': fileInput.click(); break;
+      case ' ': e.preventDefault(); toggleFreeze(); break;
+    }
+  });
+
+  /* ── Render Loop ────────────────────────────────────────────────────────── */
+  let lastTime = 0, gTime = 0, satProg = 0, frameCount = 0;
+  let tilePan = [0, 0];
+  const stopColFlat = new Float32Array(MAX_STOPS * 3);
+  const stopPosFlat = new Float32Array(MAX_STOPS);
+
+  function scrollWander(t, spd, mag) {
+    const s = t * spd;
+    return [
+      (Math.sin(s*1.000)*Math.cos(s*0.618) + Math.sin(s*2.175)*0.28) * mag,
+      (Math.cos(s*0.866)*Math.sin(s*1.234) + Math.cos(s*1.732)*0.28) * mag,
+    ];
+  }
+
+  function render(time) {
+    const dt = (time - lastTime) * 0.001; lastTime = time;
+    if (isNaN(dt) || dt > 0.5) { requestAnimationFrame(render); return; }
+
+    /* Audio amp calculation */
+    let curAmp = 0;
+    if (audioReady) {
+      analyser.getByteFrequencyData(dataArray);
+      let sum = 0; for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
+      curAmp = (sum / dataArray.length) / 255;
+    }
+    smoothAmp = smoothAmp * P.smoothing + curAmp * (1 - P.smoothing);
+    const effAmp = audioEnabled ? smoothAmp : 0;
+
+    document.getElementById('vuFill').style.width = (Math.min(effAmp, 1) * 100) + '%';
+    document.getElementById('seismicVal').textContent = effAmp.toFixed(3);
+    drawOsc();
+
+    /* Time advance: Active baseline motion (P.baseSpd) + audio boost if initialized */
+    let dynDt = 0;
+    if (!frozen) {
+      const audioBoost = (audioReady && audioEnabled) ? effAmp * P.audioMult * 0.15 : 0;
+      dynDt  = dt * (P.baseSpd + audioBoost);
+      gTime += dynDt;
+      const modT = gTime * SPD_CHG_FREQ;
+      stops.forEach(stop => {
+        const sm = 1 + P.speedVar * simplex.noise(modT, stop.seed * 0.3 + 77);
+        stop.prog += stop.speed * P.colorSpeed * sm * dynDt;
+      });
+      satProg += SAT_CHG_SPD * (1 + P.speedVar * simplex.noise(gTime * SPD_CHG_FREQ, 60)) * dynDt;
+    }
+
+    /* Compute actual stop colors */
+    actualCols = stops.map(stop => {
+      if (stop.locked) return hexToRgb01(stop.fixedColor);
+      return [
+        (simplex.noise(stop.prog, stop.seed)    + 1) * 0.5,
+        (simplex.noise(stop.prog, stop.seed+10) + 1) * 0.5,
+        (simplex.noise(stop.prog, stop.seed+20) + 1) * 0.5,
+      ];
+    });
+
+    /* Touch offset decay / smooth fluid return */
+    touchOffset[0] *= 0.985;
+    touchOffset[1] *= 0.985;
+
+    /* Tile pan accumulation */
+    if (P.tileEnabled && !frozen) {
+      const angle = gTime * 1.1 + Math.sin(gTime * 0.37) * 1.5;
+      const spd   = P.scrollMag * 0.055 * dynDt;
+      tilePan[0] += Math.cos(angle) * spd;
+      tilePan[1] += Math.sin(angle) * spd;
+      tilePan[0]  = ((tilePan[0] % 1) + 1) % 1;
+      tilePan[1]  = ((tilePan[1] % 1) + 1) % 1;
+    }
+
+    /* Video / webcam texture update */
+    if ((sourceType === 'video' || sourceType === 'webcam') && videoEl.readyState >= 2 && !videoEl.paused) {
+      gl.bindTexture(gl.TEXTURE_2D, texture);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, videoEl);
+      setTexParams();
+      if (videoEl.videoWidth && videoEl.videoWidth !== imgW) {
+        imgW = videoEl.videoWidth; imgH = videoEl.videoHeight; updateUVScale();
+      }
+    }
+
+    if (canvas.width !== window.innerWidth || canvas.height !== window.innerHeight) {
+      canvas.width = window.innerWidth; canvas.height = window.innerHeight;
+      updateUVScale();
+    }
+
+    gl.viewport(0, 0, canvas.width, canvas.height);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.useProgram(prog);
+    gl.enableVertexAttribArray(aPos);
+    gl.bindBuffer(gl.ARRAY_BUFFER, vbuf);
+    gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+    /* Bind texture */
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.uniform1i(uImage, 0);
+
+    /* Scroll wander */
+    const [sx, sy] = scrollWander(gTime, P.scrollSpd, P.scrollMag);
+
+    /* Pack stop uniforms */
+    stopColFlat.fill(0); stopPosFlat.fill(0);
+    stops.forEach((stop, i) => {
+      const c = actualCols[i];
+      stopColFlat[i*3] = c[0]; stopColFlat[i*3+1] = c[1]; stopColFlat[i*3+2] = c[2];
+      stopPosFlat[i]   = stop.pos;
+    });
+
+    /* Upload uniforms */
+    gl.uniform1f(uMode,      P.mode);
+    gl.uniform2f(uRes,       canvas.width, canvas.height);
+    gl.uniform2f(uScr,       sx, sy);
+    gl.uniform2f(uTouch,     touchOffset[0], touchOffset[1]);
+    gl.uniform1f(uNSc,       P.noiseScale);
+    gl.uniform1f(uWAm,       P.warpAmt);
+    gl.uniform1f(uWSp,       P.warpSpd);
+    gl.uniform1f(uWarpScaleVar, P.warpScaleVar);
+    gl.uniform1f(uTileScale, P.tileScale);
+    gl.uniform1f(uTileOn,    P.tileEnabled ? 1 : 0);
+    gl.uniform2f(uTilePan,   tilePan[0], tilePan[1]);
+    gl.uniform1f(uTileMode,  P.tileMode);
+    gl.uniform1f(uTileBlend, P.tileBlend);
+    gl.uniform1f(uLens,      P.lens);
+    gl.uniform1f(uChroma,    P.chroma);
+    gl.uniform1f(uHue,       P.hue);
+    gl.uniform1f(uSat,       P.sat);
+    gl.uniform1f(uBright,    P.bright);
+    gl.uniform1f(uVig,       P.vignette);
+    gl.uniform2f(uUVScale,   uvScale[0], uvScale[1]);
+    gl.uniform1f(uPulse,     effAmp);
+    gl.uniform1f(uRotate,    P.rotate * Math.PI / 180);
+    gl.uniform2f(uFlip,      P.flipX ? 1 : 0, P.flipY ? 1 : 0);
+
+    gl.uniform3fv(uStopCol,   stopColFlat);
+    gl.uniform1fv(uStopPos,   stopPosFlat);
+    gl.uniform1f(uStopCount,  stops.length);
+
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+
+    frameCount++;
+    if (frameCount % 8 === 0) updateGradientUI();
+
+    requestAnimationFrame(render);
+  }
+
+  /* Init */
+  rebuildStopUI();
+  updateUVScale();
+  setPanelTabUI();
+  requestAnimationFrame(render);
+  </script>
+</body>
+</html>
