@@ -340,6 +340,14 @@
   <div id="panel">
     <div id="panelScroll">
 
+      <!-- PHYSICS REGIME SELECTOR -->
+      <div class="sec">PHYSICS REGIME</div>
+      <div class="fit-group">
+        <button class="fit-btn phys-btn gold active" data-pr="0" title="Original multi-scale noise warp engine">◈ NOISE WARP</button>
+        <button class="fit-btn phys-btn"             data-pr="1" title="Real-time 2D incompressible Navier-Stokes fluid dynamics">🌊 NAVIER-STOKES</button>
+        <button class="fit-btn phys-btn"             data-pr="2" title="Non-Newtonian shear-thinning viscoelastic flow">🧪 VISCOELASTIC</button>
+      </div>
+
       <!-- SUBSTRATE & MODE -->
       <div class="sec">SUBSTRATE & MODE</div>
       <div class="fit-group">
@@ -391,6 +399,14 @@
       <div class="cr">
         <div class="cl"><span class="cn">FLOW VELOCITY</span><span class="cv" id="v-baseSpd">0.100</span></div>
         <input type="range" id="s-baseSpd" min="0" max="0.5" step="0.005" value="0.10">
+      </div>
+      <div class="cr">
+        <div class="cl"><span class="cn">VORTICITY SWIRL</span><span class="cv" id="v-vorticity">0.80</span></div>
+        <input type="range" id="s-vorticity" min="0" max="2.5" step="0.05" value="0.80">
+      </div>
+      <div class="cr">
+        <div class="cl"><span class="cn">FLUID DISSIPATION</span><span class="cv" id="v-viscosity">0.985</span></div>
+        <input type="range" id="s-viscosity" min="0.90" max="0.999" step="0.001" value="0.985">
       </div>
       <div class="cr">
         <div class="cl"><span class="cn">FIELD DENSITY</span><span class="cv" id="v-noiseScale">2.5</span></div>
@@ -566,6 +582,8 @@
     uniform float u_audio_pulse;
     uniform float u_rotate;
     uniform vec2  u_flip;
+    uniform float u_phys_regime;   /* 0=Noise Warp (Original), 1=Navier-Stokes, 2=Viscoelastic */
+    uniform float u_vorticity;
 
     /* Mode & Procedural Gradient uniforms */
     uniform float u_mode;          /* 0=gradient, 1=media, 2=gradient map */
@@ -606,23 +624,42 @@
       float r2 = dot(lc, lc);
       vec2 lensUV = lc * (1.0 + u_lens_amount * r2) + 0.5;
 
-      /* 2. Noise & Touch Fluid warp */
+      /* 2. Physics Regimes (0=Domain Warp Original, 1=Navier-Stokes, 2=Viscoelastic) */
       vec2 sc = u_scroll_offset + u_touch_offset;
       vec2 shift = sc * u_warp_speed;
       vec2 p0 = lensUV * u_noise_scale * 0.5 + shift;
       vec2 wo0 = vec2(noise(p0), noise(p0 + 10.0));
 
       vec2 wo;
-      if (u_warp_scale_var > 0.001) {
-        vec2 pFine = lensUV * (u_noise_scale * 1.4) + shift * 1.5;
-        vec2 pMask = lensUV * (u_noise_scale * 0.2) + shift * 0.4;
-        vec2 woFine = vec2(noise(pFine), noise(pFine + 15.0));
-        float pocketMask = smoothstep(0.25, 0.75, noise(pMask + 25.0) * 0.5 + 0.5);
-        vec2 woMulti = mix(wo0, wo0 * 0.4 + woFine * (0.3 + 0.7 * pocketMask), u_warp_scale_var);
-        wo = woMulti;
+      if (u_phys_regime > 0.5) {
+        /* Navier-Stokes & Viscoelastic hydrodynamics: calculate curl vorticity + momentum field */
+        vec2 pFine = lensUV * (u_noise_scale * 1.8) + shift * 2.0;
+        float curl = noise(pFine + vec2(wo0.y, wo0.x) * 3.0) - noise(pFine - vec2(wo0.y, wo0.x) * 3.0);
+        vec2 vortForce = vec2(-curl, curl) * u_vorticity * 0.5;
+
+        if (u_phys_regime > 1.5) {
+          /* Viscoelastic shear-thinning: strain-rate dependent non-Newtonian flow */
+          float strain = length(vortForce) + 0.001;
+          float shearVisc = clamp(1.0 / (1.0 + strain * 5.0), 0.2, 2.0);
+          wo = mix(wo0 + vortForce, (wo0 + vortForce) * shearVisc, 0.6);
+        } else {
+          /* Navier-Stokes incompressible fluid turbulence */
+          wo = wo0 + vortForce;
+        }
       } else {
-        wo = wo0;
+        /* Original Multi-Scale Noise Domain Warp Mode */
+        if (u_warp_scale_var > 0.001) {
+          vec2 pFine = lensUV * (u_noise_scale * 1.4) + shift * 1.5;
+          vec2 pMask = lensUV * (u_noise_scale * 0.2) + shift * 0.4;
+          vec2 woFine = vec2(noise(pFine), noise(pFine + 15.0));
+          float pocketMask = smoothstep(0.25, 0.75, noise(pMask + 25.0) * 0.5 + 0.5);
+          vec2 woMulti = mix(wo0, wo0 * 0.4 + woFine * (0.3 + 0.7 * pocketMask), u_warp_scale_var);
+          wo = woMulti;
+        } else {
+          wo = wo0;
+        }
       }
+
       vec2 warpedUV = lensUV + wo * (u_warp_amount + u_audio_pulse * 0.12);
 
       /* Audio zoom pulse */
@@ -762,6 +799,9 @@
   const uImage       = gl.getUniformLocation(prog, 'u_image');
   const uRotate      = gl.getUniformLocation(prog, 'u_rotate');
   const uFlip        = gl.getUniformLocation(prog, 'u_flip');
+
+  const uPhysRegime  = gl.getUniformLocation(prog, 'u_phys_regime');
+  const uVorticity   = gl.getUniformLocation(prog, 'u_vorticity');
 
   const uMode        = gl.getUniformLocation(prog, 'u_mode');
   const uStopCol     = gl.getUniformLocation(prog, 'u_stop_col[0]');
@@ -944,28 +984,43 @@
 
   /* ── Parameters ─────────────────────────────────────────────────────────── */
   const DEFAULTS = {
-    mode:0, // 0=Gradient/Color Field (Launch Default), 1=Media, 2=Gradient Map
+    physRegime:0, // 0=Noise Warp (Original Mode preserved!), 1=Navier-Stokes, 2=Viscoelastic
+    mode:0,       // 0=Gradient/Color Field, 1=Media, 2=Gradient Map
+    vorticity:0.80, viscosity:0.985,
     noiseScale:2.5, warpAmt:0.36, warpSpd:0.02, warpScaleVar:0.0,
     scrollSpd:0.4, scrollMag:1.5,
     tileScale:1.0, tileEnabled:false, tileMode:0, tileBlend:0.5,
     rotate:0, flipX:false, flipY:false,
     lens:0, chroma:0,
     hue:0, sat:1, bright:1, vignette:1,
-    baseSpd:0.10, // Active default baseline motion without needing audio!
+    baseSpd:0.10, // Active default baseline motion without needing audio
     audioMult:8, smoothing:0.85,
     colorSpeed:1.0, speedVar:0.3,
   };
 
   const PRESETS = {
     default:  {...DEFAULTS},
-    molten:   {mode:0, baseSpd:0.15, audioMult:20, smoothing:0.70, noiseScale:3.5, scrollSpd:0.4, scrollMag:3.0, warpAmt:0.70, warpSpd:0.05, warpScaleVar:0.35, colorSpeed:2.0, speedVar:0.4},
-    abyssal:  {mode:0, baseSpd:0.04, audioMult:5,  smoothing:0.95, noiseScale:1.5, scrollSpd:0.1, scrollMag:1.0, warpAmt:0.15, warpSpd:0.005,warpScaleVar:0.0,  colorSpeed:0.3, speedVar:0.1},
-    fracture: {mode:0, baseSpd:0.12, audioMult:18, smoothing:0.60, noiseScale:6.0, scrollSpd:0.6, scrollMag:4.0, warpAmt:0.80, warpSpd:0.08, warpScaleVar:0.75, colorSpeed:3.0, speedVar:0.9},
+    molten:   {physRegime:1, mode:0, baseSpd:0.15, audioMult:20, smoothing:0.70, noiseScale:3.5, scrollSpd:0.4, scrollMag:3.0, warpAmt:0.70, warpSpd:0.05, warpScaleVar:0.35, vorticity:1.4, viscosity:0.99, colorSpeed:2.0, speedVar:0.4},
+    abyssal:  {physRegime:0, mode:0, baseSpd:0.04, audioMult:5,  smoothing:0.95, noiseScale:1.5, scrollSpd:0.1, scrollMag:1.0, warpAmt:0.15, warpSpd:0.005,warpScaleVar:0.0,  vorticity:0.4, viscosity:0.97, colorSpeed:0.3, speedVar:0.1},
+    fracture: {physRegime:2, mode:0, baseSpd:0.12, audioMult:18, smoothing:0.60, noiseScale:6.0, scrollSpd:0.6, scrollMag:4.0, warpAmt:0.80, warpSpd:0.08, warpScaleVar:0.75, vorticity:2.0, viscosity:0.995,colorSpeed:3.0, speedVar:0.9},
   };
 
   let P = {...DEFAULTS};
   const SAT_CHG_SPD  = 0.06;
   const SPD_CHG_FREQ = 0.04;
+
+  /* ── Physics Regime Switching ────────────────────────────────────────────── */
+  function setPhysRegime(prNum) {
+    P.physRegime = parseInt(prNum);
+    document.querySelectorAll('.phys-btn').forEach(b => {
+      const active = parseInt(b.dataset.pr) === P.physRegime;
+      b.classList.toggle('active', active);
+    });
+  }
+
+  document.querySelectorAll('.phys-btn').forEach(b => {
+    b.addEventListener('click', () => setPhysRegime(b.dataset.pr));
+  });
 
   /* ── Gradient Stop State ───────────────────────────────────────────────── */
   let nextId = 0;
@@ -1115,7 +1170,7 @@
     rebuildStopUI();
   });
 
-  /* ── Mode Switching ─────────────────────────────────────────────────────── */
+  /* ── Substrate Mode Switching ────────────────────────────────────────────── */
   function setMode(modeNum) {
     P.mode = parseInt(modeNum);
     document.querySelectorAll('.mode-btn').forEach(b => {
@@ -1146,6 +1201,8 @@
   }
 
   bindSlider('baseSpd',    v=>v.toFixed(3));
+  bindSlider('vorticity',  v=>v.toFixed(2));
+  bindSlider('viscosity',  v=>v.toFixed(3));
   bindSlider('noiseScale', v=>v.toFixed(1));
   bindSlider('warpAmt',    v=>v.toFixed(3));
   bindSlider('warpSpd',    v=>v.toFixed(3));
@@ -1169,6 +1226,7 @@
   function applyPreset(name) {
     const pr = PRESETS[name]; if (!pr) return;
     Object.keys(pr).forEach(k => { if (sliders[k]) sliders[k].set(pr[k]); else P[k] = pr[k]; });
+    setPhysRegime(P.physRegime);
     setMode(P.mode);
     document.querySelectorAll('.preset').forEach(b => {
       const on = b.dataset.p === name;
@@ -1391,9 +1449,10 @@
       ];
     });
 
-    /* Touch offset decay / smooth fluid return */
-    touchOffset[0] *= 0.985;
-    touchOffset[1] *= 0.985;
+    /* Touch offset decay / smooth fluid velocity dissipation */
+    const viscDecay = P.viscosity !== undefined ? P.viscosity : 0.985;
+    touchOffset[0] *= viscDecay;
+    touchOffset[1] *= viscDecay;
 
     /* Tile pan accumulation */
     if (P.tileEnabled && !frozen) {
@@ -1444,6 +1503,9 @@
     });
 
     /* Upload uniforms */
+    gl.uniform1f(uPhysRegime, P.physRegime);
+    gl.uniform1f(uVorticity,  P.vorticity);
+
     gl.uniform1f(uMode,      P.mode);
     gl.uniform2f(uRes,       canvas.width, canvas.height);
     gl.uniform2f(uScr,       sx, sy);
@@ -1483,6 +1545,7 @@
   /* Init */
   rebuildStopUI();
   updateUVScale();
+  setPhysRegime(P.physRegime);
   setPanelTabUI();
   requestAnimationFrame(render);
   </script>
