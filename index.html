@@ -99,12 +99,12 @@
       position: fixed; top: var(--th); right: 0;
       width: var(--pw); height: calc(100% - var(--th));
       background: var(--panel-bg); border-left: 1px solid var(--border);
-      z-index: 90; display: flex; overflow: hidden;
+      z-index: 90; display: flex; flex-direction: column; overflow: visible;
       transform: translateX(0);
       transition: transform 0.38s cubic-bezier(0.22,1,0.36,1), opacity 0.4s;
       backdrop-filter: blur(16px);
     }
-    #panel.hidden { transform: translateX(calc(var(--pw) - var(--tab))); }
+    #panel.hidden { transform: translateX(100%); }
     #panelScroll {
       flex:1; overflow-y:auto; overflow-x:hidden; padding: 12px 14px 40px;
       scrollbar-width:thin; scrollbar-color: var(--border) transparent;
@@ -112,27 +112,35 @@
     }
     #panelScroll::-webkit-scrollbar { width:4px; }
     #panelScroll::-webkit-scrollbar-thumb { background:var(--border); border-radius:2px; }
+
     #panelTab {
-      width:var(--tab); min-width:var(--tab); flex-shrink:0;
-      display:flex; flex-direction:column; align-items:center; justify-content:center;
-      cursor:pointer; font-family:var(--font-mono); font-size:11px; color:var(--cyan);
-      border-left:1px solid var(--border); user-select:none;
-      transition:color 0.15s, background 0.15s; z-index:11;
+      position: absolute; top: 50%; left: -36px; transform: translateY(-50%);
+      width: 36px; height: 110px;
+      background: var(--panel-bg); border: 1px solid var(--border); border-right: none;
+      border-radius: 10px 0 0 10px;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      cursor: pointer; font-family: var(--font-mono); font-size: 10px; color: var(--cyan);
+      backdrop-filter: blur(16px); user-select: none;
+      box-shadow: -4px 0 16px rgba(0, 0, 0, 0.4); z-index: 95;
       writing-mode: vertical-rl; text-orientation: mixed; letter-spacing: 0.15em;
+      transition: color 0.15s, background 0.15s, border-color 0.15s;
     }
-    #panelTab:hover { background:rgba(56, 189, 248, 0.15); color:var(--frost); }
+    #panelTab:hover { background: rgba(15, 23, 42, 0.98); color: var(--frost); border-color: var(--cyan); }
 
     /* Mobile Responsive Panel Adjustments */
     @media (max-width: 768px) {
-      :root { --pw: 100vw; --tab: 44px; }
+      :root { --pw: 100vw; }
       #panel { border-left: none; border-top: 1px solid var(--border); }
-      #panel.hidden { transform: translateY(calc(100% - 44px)); }
+      #panel.hidden { transform: translateY(100%); }
       #panelTab {
-        width: 100%; height: 44px; border-left: none; border-bottom: 1px solid var(--border);
-        background: rgba(6, 10, 22, 0.96); position: absolute; top: 0; left: 0; right: 0;
+        position: absolute; top: -44px; left: 0; right: 0; transform: none;
+        width: 100%; height: 44px; border-left: none; border-right: none; border-bottom: none;
+        border-top: 1px solid var(--border); border-radius: 12px 12px 0 0;
+        background: rgba(6, 10, 22, 0.96);
         writing-mode: horizontal-tb; flex-direction: row; gap: 8px;
+        box-shadow: 0 -4px 16px rgba(0,0,0,0.5);
       }
-      #panelScroll { padding-top: 50px; }
+      #panelScroll { padding-top: 14px; }
       #vuWrap, #seismicWrap { display: none; }
     }
 
