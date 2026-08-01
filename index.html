@@ -339,6 +339,7 @@
     </div>
     <span id="seismicWrap">SEI&nbsp;<span id="seismicVal">0.000</span></span>
     <div class="spacer"></div>
+    <button id="snapTopBtn"  class="tbtn phos">📷 SNAP (PNG)</button>
     <button id="freezeTopBtn" class="tbtn">⏸ FREEZE</button>
     <div class="sep"></div>
     <button id="darkBtn" class="tbtn warn">⊘ DARK</button>
@@ -551,6 +552,7 @@
 
       <!-- PRESETS & SYSTEM -->
       <div class="sec">PRESETS & SYSTEM</div>
+      <button id="snapPanelBtn" class="pbtn phos" style="margin-bottom:8px">📷 EXPORT PNG SNAPSHOT</button>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px">
         <button class="pbtn preset active" data-p="default">◼ DEFAULT</button>
         <button class="pbtn preset"        data-p="molten">◻ MOLTEN</button>
@@ -565,6 +567,7 @@
       <!-- KEYS & TOUCH -->
       <div class="sec">KEYS & TOUCH</div>
       <div class="kr"><span class="kb">DRAG</span><span class="kd">stir fluid velocity field</span></div>
+      <div class="kr"><span class="kb">S</span><span class="kd">export PNG snapshot</span></div>
       <div class="kr"><span class="kb">H</span><span class="kd">toggle panel</span></div>
       <div class="kr"><span class="kb">F</span><span class="kd">fullscreen</span></div>
       <div class="kr"><span class="kb">U</span><span class="kd">hide all UI</span></div>
@@ -874,7 +877,7 @@
 
   /* ── WebGL setup ────────────────────────────────────────────────────────── */
   const canvas = document.getElementById('glCanvas');
-  const gl     = canvas.getContext('webgl', { alpha: false, antialias: true });
+  const gl     = canvas.getContext('webgl', { alpha: false, antialias: true, preserveDrawingBuffer: true });
   if (!gl) alert('WebGL not supported!');
 
   const MAX_STOPS = 8;
@@ -1615,9 +1618,35 @@
     document.getElementById('fsBtn').classList.toggle('active', on);
   });
 
+  /* ── High-Res PNG Canvas Snapshot Export ──────────────────────────────── */
+  function takeSnapshot() {
+    canvas.toBlob(blob => {
+      if (!blob) return;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const now = new Date();
+      const timestamp = now.getFullYear().toString() +
+        String(now.getMonth() + 1).padStart(2, '0') +
+        String(now.getDate()).padStart(2, '0') + '-' +
+        String(now.getHours()).padStart(2, '0') +
+        String(now.getMinutes()).padStart(2, '0') +
+        String(now.getSeconds()).padStart(2, '0');
+      a.download = `benzaiten-flow-${timestamp}.png`;
+      a.href = url;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }, 'image/png');
+  }
+
+  const snapTopBtn   = document.getElementById('snapTopBtn');
+  const snapPanelBtn = document.getElementById('snapPanelBtn');
+  if (snapTopBtn)   snapTopBtn.addEventListener('click', takeSnapshot);
+  if (snapPanelBtn) snapPanelBtn.addEventListener('click', takeSnapshot);
+
   document.addEventListener('keydown', e => {
     if (e.target.tagName === 'INPUT') return;
     switch (e.key.toLowerCase()) {
+      case 's': takeSnapshot(); break;
       case 'h': togglePanel(); break;
       case 'f': toggleFS(); break;
       case 'u': toggleDark(); break;
