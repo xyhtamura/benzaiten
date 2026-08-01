@@ -535,7 +535,8 @@
       <div class="sec">AUDIO SURGES (RESONANCE)</div>
       <p style="font-size:9px;color:var(--text);opacity:0.7;margin-bottom:8px;">Modulates flow velocity on live beat hits</p>
       <button id="pAudioBtn" class="pbtn phos">⬡ INITIALIZE AUDIO</button>
-      <button id="pRxToggle" style="display:none">⚡ AUDIO REACTIVE: ON</button>
+      <button id="pRxToggle" class="pbtn" style="display:none">⚡ AUDIO REACTIVE: ON</button>
+      <button id="pBandToggle" class="pbtn" style="display:none">◈ AUDIO MODE: PLAIN AMP (DEFAULT)</button>
       <canvas id="oscCanvas"></canvas>
       <div class="cr">
         <div class="cl"><span class="cn">SEISMIC GAIN</span><span class="cv" id="v-audioMult">8.0</span></div>
@@ -1500,6 +1501,7 @@
   const oscCtx = oscC.getContext('2d');
   oscC.height  = 48;
   let audioReady = false, audioEnabled = true, smoothAmp = 0;
+  let smoothBass = 0, smoothMid = 0, smoothTreble = 0;
   let audioCtx, analyser, dataArray;
 
   function drawOsc() {
@@ -1544,10 +1546,19 @@
       });
       document.getElementById('rxBtn').style.display = '';
       document.getElementById('pRxToggle').style.display = '';
+      document.getElementById('pBandToggle').style.display = '';
     } catch (e) { alert('Microphone access required for audio reactivity.'); }
   }
   document.getElementById('audioBtn').addEventListener('click', initAudio);
   document.getElementById('pAudioBtn').addEventListener('click', initAudio);
+
+  let audioBandMode = false;
+  const pBandToggle = document.getElementById('pBandToggle');
+  pBandToggle.addEventListener('click', () => {
+    audioBandMode = !audioBandMode;
+    pBandToggle.textContent = audioBandMode ? '⚡ AUDIO MODE: 3-BAND COUPLING' : '◈ AUDIO MODE: PLAIN AMP (DEFAULT)';
+    pBandToggle.classList.toggle('active', audioBandMode);
+  });
 
   function setRxUI() {
     const on = audioEnabled;
@@ -1634,15 +1645,32 @@
     const dt = (time - lastTime) * 0.001; lastTime = time;
     if (isNaN(dt) || dt > 0.5) { requestAnimationFrame(render); return; }
 
-    /* Audio amp calculation */
-    let curAmp = 0;
+    /* Audio amp & 3-band FFT calculation */
+    let curAmp = 0, curBass = 0, curMid = 0, curTreble = 0;
     if (audioReady) {
       analyser.getByteFrequencyData(dataArray);
-      let sum = 0; for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
-      curAmp = (sum / dataArray.length) / 255;
+      let sum = 0, sumBass = 0, sumMid = 0, sumTreble = 0;
+      for (let i = 0; i < dataArray.length; i++) {
+        const v = dataArray[i];
+        sum += v;
+        if (i < 18) sumBass += v;
+        else if (i < 70) sumMid += v;
+        else sumTreble += v;
+      }
+      curAmp    = (sum / dataArray.length) / 255;
+      curBass   = (sumBass / 18) / 255;
+      curMid    = (sumMid / 52) / 255;
+      curTreble = (sumTreble / 58) / 255;
     }
-    smoothAmp = smoothAmp * P.smoothing + curAmp * (1 - P.smoothing);
-    const effAmp = audioEnabled ? smoothAmp : 0;
+    smoothAmp    = smoothAmp    * P.smoothing + curAmp    * (1 - P.smoothing);
+    smoothBass   = smoothBass   * P.smoothing + curBass   * (1 - P.smoothing);
+    smoothMid    = smoothMid    * P.smoothing + curMid    * (1 - P.smoothing);
+    smoothTreble = smoothTreble * P.smoothing + curTreble * (1 - P.smoothing);
+
+    const effAmp    = audioEnabled ? smoothAmp : 0;
+    const effBass   = (audioEnabled && audioBandMode) ? smoothBass   : 0;
+    const effMid    = (audioEnabled && audioBandMode) ? smoothMid    : 0;
+    const effTreble = (audioEnabled && audioBandMode) ? smoothTreble : 0;
 
     document.getElementById('vuFill').style.width = (Math.min(effAmp, 1) * 100) + '%';
     document.getElementById('seismicVal').textContent = effAmp.toFixed(3);
@@ -1728,9 +1756,13 @@
       stopPosFlat[i]   = stop.pos;
     });
 
-    /* Upload uniforms */
+    /* Upload uniforms with 3-band audio coupling */
+    const dynVorticity = P.vorticity + effBass * P.audioMult * 0.15;
+    const dynWarpSpd   = P.warpSpd   + effMid  * P.audioMult * 0.005;
+    const dynHueShift  = P.hue       + effTreble * P.audioMult * 0.01;
+
     gl.uniform1f(uPhysRegime, P.physRegime);
-    gl.uniform1f(uVorticity,  P.vorticity);
+    gl.uniform1f(uVorticity,  dynVorticity);
     gl.uniform2f(uTouchPos1,  touchPos1[0], touchPos1[1]);
     gl.uniform2f(uTouchPos2,  touchPos2[0], touchPos2[1]);
     gl.uniform1f(uTouchCount, touchCount);
@@ -1742,7 +1774,7 @@
     gl.uniform2f(uTouch,     touchOffset[0], touchOffset[1]);
     gl.uniform1f(uNSc,       P.noiseScale);
     gl.uniform1f(uWAm,       P.warpAmt);
-    gl.uniform1f(uWSp,       P.warpSpd);
+    gl.uniform1f(uWSp,       dynWarpSpd);
     gl.uniform1f(uWarpScaleVar, P.warpScaleVar);
     gl.uniform1f(uTileScale, P.tileScale);
     gl.uniform1f(uTileOn,    P.tileEnabled ? 1 : 0);
@@ -1751,7 +1783,7 @@
     gl.uniform1f(uTileBlend, P.tileBlend);
     gl.uniform1f(uLens,      P.lens);
     gl.uniform1f(uChroma,    P.chroma);
-    gl.uniform1f(uHue,       P.hue);
+    gl.uniform1f(uHue,       dynHueShift);
     gl.uniform1f(uSat,       P.sat);
     gl.uniform1f(uBright,    P.bright);
     gl.uniform1f(uVig,       P.vignette);
