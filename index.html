@@ -180,6 +180,15 @@
     input[type=range].dimmed { opacity: 0.3; pointer-events: none; }
 
     /* ── MODE & FIT BUTTONS ─────────────────── */
+    .select-box {
+      width: 100%; min-height: 36px; padding: 6px 10px; margin-bottom: 10px;
+      font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.08em;
+      color: var(--frost); background: rgba(15, 23, 42, 0.75); border: 1px solid var(--border);
+      border-radius: 6px; cursor: pointer; outline: none; transition: border-color 0.15s;
+    }
+    .select-box:hover, .select-box:focus { border-color: var(--cyan); }
+    .select-box option { background: var(--bg-dark); color: var(--frost); }
+
     .fit-group { display: flex; gap: 4px; margin-bottom: 10px; }
     .fit-btn {
       flex: 1; min-height: 36px; padding: 6px 4px; font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.08em;
@@ -340,13 +349,13 @@
   <div id="panel">
     <div id="panelScroll">
 
-      <!-- PHYSICS REGIME SELECTOR -->
-      <div class="sec">PHYSICS REGIME</div>
-      <div class="fit-group">
-        <button class="fit-btn phys-btn gold active" data-pr="0" title="Original multi-scale noise warp engine">◈ NOISE WARP</button>
-        <button class="fit-btn phys-btn"             data-pr="1" title="Real-time 2D incompressible Navier-Stokes fluid dynamics">🌊 NAVIER-STOKES</button>
-        <button class="fit-btn phys-btn"             data-pr="2" title="Non-Newtonian shear-thinning viscoelastic flow">🧪 VISCOELASTIC</button>
-      </div>
+      <!-- REGIME SELECTOR -->
+      <div class="sec">REGIME</div>
+      <select id="s-physRegime" class="select-box">
+        <option value="0" selected>DOMAIN WARP (Original)</option>
+        <option value="1">NAVIER-STOKES (Fluid Dynamics)</option>
+        <option value="2">VISCOELASTIC (Shear-Thinning Lava)</option>
+      </select>
 
       <!-- SUBSTRATE & MODE -->
       <div class="sec">SUBSTRATE & MODE</div>
@@ -1010,17 +1019,14 @@
   const SPD_CHG_FREQ = 0.04;
 
   /* ── Physics Regime Switching ────────────────────────────────────────────── */
+  const physSelect = document.getElementById('s-physRegime');
   function setPhysRegime(prNum) {
     P.physRegime = parseInt(prNum);
-    document.querySelectorAll('.phys-btn').forEach(b => {
-      const active = parseInt(b.dataset.pr) === P.physRegime;
-      b.classList.toggle('active', active);
-    });
+    if (physSelect) physSelect.value = String(P.physRegime);
   }
-
-  document.querySelectorAll('.phys-btn').forEach(b => {
-    b.addEventListener('click', () => setPhysRegime(b.dataset.pr));
-  });
+  if (physSelect) {
+    physSelect.addEventListener('change', e => setPhysRegime(e.target.value));
+  }
 
   /* ── Gradient Stop State ───────────────────────────────────────────────── */
   let nextId = 0;
