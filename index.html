@@ -403,6 +403,24 @@
 
       <div class="crystal"></div>
 
+      <!-- PARTICLE TRACERS OVERLAY -->
+      <div class="sec">PARTICLE TRACERS</div>
+      <button id="partBtn" class="pbtn active">✨ TRACERS: ON</button>
+      <div class="cr">
+        <div class="cl"><span class="cn">TRACER COUNT</span><span class="cv" id="v-partCount">10,000</span></div>
+        <input type="range" id="s-partCount" min="1000" max="20000" step="1000" value="10000">
+      </div>
+      <div class="cr">
+        <div class="cl"><span class="cn">PARTICLE GLOW</span><span class="cv" id="v-partSize">4.0px</span></div>
+        <input type="range" id="s-partSize" min="1" max="12" step="0.5" value="4.0">
+      </div>
+      <div class="cr">
+        <div class="cl"><span class="cn">PARTICLE SPEED</span><span class="cv" id="v-partSpeed">1.00</span></div>
+        <input type="range" id="s-partSpeed" min="0.1" max="3" step="0.05" value="1.0">
+      </div>
+
+      <div class="crystal"></div>
+
       <!-- FIELD & FLUID FLOW (ACTIVE WITHOUT AUDIO) -->
       <div class="sec">FIELD & FLUID FLOW</div>
       <div class="cr">
@@ -726,7 +744,7 @@
         vec3 texCol = vec3(r, g, b);
 
         if (u_tile_enabled < 0.5) {
-          float inB = step(0.,sampleUV.x)*step(sampleUV.x,1.)*step(0.,sampleUV.y)*step(sampleUV.y,1.);
+          float inB = step(0.,sampleUV.x)*step(sampleUV.x,1.)*step(0.,sampleUV.y)*step(sampleUV.y,1 me);
           texCol *= inB;
         } else {
           texCol *= tileVig;
@@ -759,13 +777,73 @@
     }
   </script>
 
+  <!-- PARTICLE TRACER SHADERS -->
+  <script id="particle-vs" type="x-shader/x-vertex">
+    attribute vec2 a_pPos;
+    attribute float a_pSeed;
+
+    uniform vec2  u_scroll_offset;
+    uniform vec2  u_touch_offset;
+    uniform float u_noise_scale;
+    uniform float u_warp_speed;
+    uniform float u_part_speed;
+    uniform float u_part_size;
+    uniform float u_phys_regime;
+    uniform float u_time;
+
+    varying float v_alpha;
+    varying float v_seed;
+
+    vec2 hash(vec2 p){p=vec2(dot(p,vec2(127.1,311.7)),dot(p,vec2(269.5,183.3)));return-1.+2.*fract(sin(p)*43758.5453123);}
+    float noise(in vec2 p){const float K1=.366025404,K2=.211324865;vec2 i=floor(p+(p.x+p.y)*K1);vec2 a=p-i+(i.x+i.y)*K2;vec2 o=(a.x>a.y)?vec2(1.,0.):vec2(0.,1.);vec2 b=a-o+K2;vec2 c=a-1.+2.*K2;vec3 h=max(.5-vec3(dot(a,a),dot(b,b),dot(c,c)),0.);vec3 n=h*h*h*h*vec3(dot(a,hash(i+0.)),dot(b,hash(i+o)),dot(c,hash(i+1.)));return dot(n,vec3(70.));}
+
+    void main() {
+      vec2 shift = (u_scroll_offset + u_touch_offset) * u_warp_speed;
+      vec2 p0 = a_pPos * u_noise_scale * 0.5 + shift;
+      vec2 vel = vec2(noise(p0), noise(p0 + 10.0));
+
+      if (u_phys_regime > 0.5) {
+        vec2 pFine = a_pPos * (u_noise_scale * 1.8) + shift * 2.0;
+        float curl = noise(pFine + vec2(vel.y, vel.x) * 3.0) - noise(pFine - vec2(vel.y, vel.x) * 3.0);
+        vel += vec2(-curl, curl) * 0.8;
+      }
+
+      /* Stream particles along fluid velocity vector */
+      vec2 pFlow = a_pPos + vel * (0.008 * u_part_speed) + u_touch_offset * 0.08;
+      pFlow = fract((pFlow + 1.0) * 0.5) * 2.0 - 1.0;
+
+      v_alpha = smoothstep(1.0, 0.75, length(pFlow)) * 0.85;
+      v_seed  = a_pSeed;
+
+      gl_Position  = vec4(pFlow, 0.0, 1.0);
+      gl_PointSize = u_part_size * (1.0 + noise(a_pPos * 8.0 + vec2(u_time * 2.0)) * 0.4);
+    }
+  </script>
+
+  <script id="particle-fs" type="x-shader/x-fragment">
+    precision mediump float;
+    varying float v_alpha;
+    varying float v_seed;
+
+    void main() {
+      vec2 coord = gl_PointCoord - vec2(0.5);
+      float dist = length(coord);
+      if (dist > 0.5) discard;
+      float alpha = (1.0 - dist * 2.0) * v_alpha;
+
+      /* Soft bioluminescent cyan / silk gold particle glow */
+      vec3 col = mix(vec3(0.88, 0.95, 1.0), vec3(0.22, 0.74, 0.97), sin(v_seed * 10.0) * 0.5 + 0.5);
+      gl_FragColor = vec4(col * alpha, alpha);
+    }
+  </script>
+
   <script>
   /* ── SimplexNoise ──────────────────────────────────────────────────────── */
   (function(){"use strict";var F2=0.5*(Math.sqrt(3)-1),G2=(3-Math.sqrt(3))/6;function SimplexNoise(r){if(!r)r=Math.random;this.p=new Uint8Array(256);this.perm=new Uint8Array(512);this.permMod12=new Uint8Array(512);for(var i=0;i<256;i++)this.p[i]=i;for(var i=0;i<255;i++){var k=i+~~(r()*(256-i)),a=this.p[i];this.p[i]=this.p[k];this.p[k]=a}for(var i=0;i<512;i++){this.perm[i]=this.p[i&255];this.permMod12[i]=this.perm[i]%12}this.grad3=new Float32Array([1,1,0,-1,1,0,1,-1,0,-1,-1,0,1,0,1,-1,0,1,1,0,-1,-1,0,-1,0,1,1,0,-1,1,0,1,-1,0,-1,-1])}SimplexNoise.prototype={noise:function(x,y){var n0,n1,n2,s=(x+y)*F2,i=Math.floor(x+s),j=Math.floor(y+s),t=(i+j)*G2,x0=x-(i-t),y0=y-(j-t),i1,j1;if(x0>y0){i1=1;j1=0}else{i1=0;j1=1}var x1=x0-i1+G2,y1=y0-j1+G2,x2=x0-1+2*G2,y2=y0-1+2*G2,ii=i&255,jj=j&255,gi0=this.permMod12[ii+this.perm[jj]],gi1=this.permMod12[ii+i1+this.perm[jj+j1]],gi2=this.permMod12[ii+1+this.perm[jj+1]],t0=0.5-x0*x0-y0*y0;if(t0<0)n0=0;else{t0*=t0;n0=t0*t0*this.dot(this.grad3,gi0,x0,y0)}var t1=0.5-x1*x1-y1*y1;if(t1<0)n1=0;else{t1*=t1;n1=t1*t1*this.dot(this.grad3,gi1,x1,y1)}var t2=0.5-x2*x2-y2*y2;if(t2<0)n2=0;else{t2*=t2;n2=t2*t2*this.dot(this.grad3,gi2,x2,y2)}return 70*(n0+n1+n2)},dot:function(g,gi,x,y){return g[gi]*x+g[gi+1]*y}};window.SimplexNoise=SimplexNoise})();
 
   /* ── WebGL setup ────────────────────────────────────────────────────────── */
   const canvas = document.getElementById('glCanvas');
-  const gl     = canvas.getContext('webgl');
+  const gl     = canvas.getContext('webgl', { alpha: false, antialias: true });
   if (!gl) alert('WebGL not supported!');
 
   const MAX_STOPS = 8;
@@ -779,6 +857,16 @@
     const p = gl.createProgram();
     gl.attachShader(p, mkShader(gl.VERTEX_SHADER,   document.getElementById('vertex-shader').text));
     gl.attachShader(p, mkShader(gl.FRAGMENT_SHADER, document.getElementById('fragment-shader').text));
+    gl.linkProgram(p);
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) { console.error(gl.getProgramInfoLog(p)); return null; }
+    return p;
+  })();
+
+  /* Particle Program */
+  const partProg = (() => {
+    const p = gl.createProgram();
+    gl.attachShader(p, mkShader(gl.VERTEX_SHADER,   document.getElementById('particle-vs').text));
+    gl.attachShader(p, mkShader(gl.FRAGMENT_SHADER, document.getElementById('particle-fs').text));
     gl.linkProgram(p);
     if (!gl.getProgramParameter(p, gl.LINK_STATUS)) { console.error(gl.getProgramInfoLog(p)); return null; }
     return p;
@@ -817,9 +905,40 @@
   const uStopPos     = gl.getUniformLocation(prog, 'u_stop_pos[0]');
   const uStopCount   = gl.getUniformLocation(prog, 'u_stop_count');
 
+  /* Particle Uniforms & Attribs */
+  const paPos        = gl.getAttribLocation(partProg,  'a_pPos');
+  const paSeed       = gl.getAttribLocation(partProg,  'a_pSeed');
+  const puScr        = gl.getUniformLocation(partProg, 'u_scroll_offset');
+  const puTouch      = gl.getUniformLocation(partProg, 'u_touch_offset');
+  const puNSc        = gl.getUniformLocation(partProg, 'u_noise_scale');
+  const puWSp        = gl.getUniformLocation(partProg, 'u_warp_speed');
+  const puPartSpeed  = gl.getUniformLocation(partProg, 'u_part_speed');
+  const puPartSize   = gl.getUniformLocation(partProg, 'u_part_size');
+  const puPhysRegime = gl.getUniformLocation(partProg, 'u_phys_regime');
+  const puTime       = gl.getUniformLocation(partProg, 'u_time');
+
   const vbuf = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, vbuf);
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1,1,-1,-1,1,-1,1,1,-1,1,1]), gl.STATIC_DRAW);
+
+  /* Particle Buffer Initialization (20,000 Particles) */
+  const MAX_PARTICLES = 20000;
+  const pPosData  = new Float32Array(MAX_PARTICLES * 2);
+  const pSeedData = new Float32Array(MAX_PARTICLES);
+
+  for (let i = 0; i < MAX_PARTICLES; i++) {
+    pPosData[i * 2]     = (Math.random() * 2 - 1);
+    pPosData[i * 2 + 1] = (Math.random() * 2 - 1);
+    pSeedData[i]        = Math.random() * 100.0;
+  }
+
+  const pPosBuf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, pPosBuf);
+  gl.bufferData(gl.ARRAY_BUFFER, pPosData, gl.DYNAMIC_DRAW);
+
+  const pSeedBuf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, pSeedBuf);
+  gl.bufferData(gl.ARRAY_BUFFER, pSeedData, gl.STATIC_DRAW);
 
   const simplex = new SimplexNoise();
 
@@ -995,6 +1114,7 @@
   const DEFAULTS = {
     physRegime:0, // 0=Noise Warp (Original Mode preserved!), 1=Navier-Stokes, 2=Viscoelastic
     mode:0,       // 0=Gradient/Color Field, 1=Media, 2=Gradient Map
+    partOn:true, partCount:10000, partSize:4.0, partSpeed:1.0,
     vorticity:0.80, viscosity:0.985,
     noiseScale:2.5, warpAmt:0.36, warpSpd:0.02, warpScaleVar:0.0,
     scrollSpd:0.4, scrollMag:1.5,
@@ -1009,9 +1129,9 @@
 
   const PRESETS = {
     default:  {...DEFAULTS},
-    molten:   {physRegime:1, mode:0, baseSpd:0.15, audioMult:20, smoothing:0.70, noiseScale:3.5, scrollSpd:0.4, scrollMag:3.0, warpAmt:0.70, warpSpd:0.05, warpScaleVar:0.35, vorticity:1.4, viscosity:0.99, colorSpeed:2.0, speedVar:0.4},
-    abyssal:  {physRegime:0, mode:0, baseSpd:0.04, audioMult:5,  smoothing:0.95, noiseScale:1.5, scrollSpd:0.1, scrollMag:1.0, warpAmt:0.15, warpSpd:0.005,warpScaleVar:0.0,  vorticity:0.4, viscosity:0.97, colorSpeed:0.3, speedVar:0.1},
-    fracture: {physRegime:2, mode:0, baseSpd:0.12, audioMult:18, smoothing:0.60, noiseScale:6.0, scrollSpd:0.6, scrollMag:4.0, warpAmt:0.80, warpSpd:0.08, warpScaleVar:0.75, vorticity:2.0, viscosity:0.995,colorSpeed:3.0, speedVar:0.9},
+    molten:   {physRegime:1, mode:0, partOn:true, partCount:12000, partSize:5.0, partSpeed:1.5, baseSpd:0.15, audioMult:20, smoothing:0.70, noiseScale:3.5, scrollSpd:0.4, scrollMag:3.0, warpAmt:0.70, warpSpd:0.05, warpScaleVar:0.35, vorticity:1.4, viscosity:0.99, colorSpeed:2.0, speedVar:0.4},
+    abyssal:  {physRegime:0, mode:0, partOn:true, partCount:6000,  partSize:3.0, partSpeed:0.4, baseSpd:0.04, audioMult:5,  smoothing:0.95, noiseScale:1.5, scrollSpd:0.1, scrollMag:1.0, warpAmt:0.15, warpSpd:0.005,warpScaleVar:0.0,  vorticity:0.4, viscosity:0.97, colorSpeed:0.3, speedVar:0.1},
+    fracture: {physRegime:2, mode:0, partOn:true, partCount:15000, partSize:6.0, partSpeed:2.0, baseSpd:0.12, audioMult:18, smoothing:0.60, noiseScale:6.0, scrollSpd:0.6, scrollMag:4.0, warpAmt:0.80, warpSpd:0.08, warpScaleVar:0.75, vorticity:2.0, viscosity:0.995,colorSpeed:3.0, speedVar:0.9},
   };
 
   let P = {...DEFAULTS};
@@ -1027,6 +1147,14 @@
   if (physSelect) {
     physSelect.addEventListener('change', e => setPhysRegime(e.target.value));
   }
+
+  /* ── Particle Tracer Toggle ──────────────────────────────────────────────── */
+  const partBtn = document.getElementById('partBtn');
+  partBtn.addEventListener('click', () => {
+    P.partOn = !P.partOn;
+    partBtn.textContent = P.partOn ? '✨ TRACERS: ON' : '◻ TRACERS: OFF';
+    partBtn.classList.toggle('active', P.partOn);
+  });
 
   /* ── Gradient Stop State ───────────────────────────────────────────────── */
   let nextId = 0;
@@ -1206,6 +1334,9 @@
     sliders[key] = { set(v){ el.value=v; refresh(); } };
   }
 
+  bindSlider('partCount',  v=>Math.round(v).toLocaleString());
+  bindSlider('partSize',   v=>v.toFixed(1)+'px');
+  bindSlider('partSpeed',  v=>v.toFixed(2));
   bindSlider('baseSpd',    v=>v.toFixed(3));
   bindSlider('vorticity',  v=>v.toFixed(2));
   bindSlider('viscosity',  v=>v.toFixed(3));
@@ -1234,6 +1365,8 @@
     Object.keys(pr).forEach(k => { if (sliders[k]) sliders[k].set(pr[k]); else P[k] = pr[k]; });
     setPhysRegime(P.physRegime);
     setMode(P.mode);
+    partBtn.textContent = P.partOn ? '✨ TRACERS: ON' : '◻ TRACERS: OFF';
+    partBtn.classList.toggle('active', P.partOn);
     document.querySelectorAll('.preset').forEach(b => {
       const on = b.dataset.p === name;
       b.classList.toggle('active', on);
@@ -1487,6 +1620,8 @@
 
     gl.viewport(0, 0, canvas.width, canvas.height);
     gl.clear(gl.COLOR_BUFFER_BIT);
+
+    /* ── PASS 1: Main Fluid Matter & Substrate Shader ─────────────────────── */
     gl.useProgram(prog);
     gl.enableVertexAttribArray(aPos);
     gl.bindBuffer(gl.ARRAY_BUFFER, vbuf);
@@ -1541,6 +1676,35 @@
     gl.uniform1f(uStopCount,  stops.length);
 
     gl.drawArrays(gl.TRIANGLES, 0, 6);
+
+    /* ── PASS 2: Fluid Particle Tracers Overlay ───────────────────────────── */
+    if (P.partOn) {
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.SRC_ALPHA, gl.ONE); // Glowing additive blending
+
+      gl.useProgram(partProg);
+      gl.uniform2f(puScr,       sx, sy);
+      gl.uniform2f(puTouch,     touchOffset[0], touchOffset[1]);
+      gl.uniform1f(puNSc,       P.noiseScale);
+      gl.uniform1f(puWSp,       P.warpSpd);
+      gl.uniform1f(puPartSpeed, P.partSpeed);
+      gl.uniform1f(puPartSize,  P.partSize);
+      gl.uniform1f(puPhysRegime,P.physRegime);
+      gl.uniform1f(puTime,      gTime);
+
+      gl.enableVertexAttribArray(paPos);
+      gl.bindBuffer(gl.ARRAY_BUFFER, pPosBuf);
+      gl.vertexAttribPointer(paPos, 2, gl.FLOAT, false, 0, 0);
+
+      gl.enableVertexAttribArray(paSeed);
+      gl.bindBuffer(gl.ARRAY_BUFFER, pSeedBuf);
+      gl.vertexAttribPointer(paSeed, 1, gl.FLOAT, false, 0, 0);
+
+      const renderCount = Math.min(MAX_PARTICLES, Math.round(P.partCount));
+      gl.drawArrays(gl.POINTS, 0, renderCount);
+
+      gl.disable(gl.BLEND);
+    }
 
     frameCount++;
     if (frameCount % 8 === 0) updateGradientUI();
