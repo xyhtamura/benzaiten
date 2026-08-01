@@ -405,7 +405,7 @@
 
       <!-- PARTICLE TRACERS OVERLAY -->
       <div class="sec">PARTICLE TRACERS</div>
-      <button id="partBtn" class="pbtn active">✨ TRACERS: ON</button>
+      <button id="partBtn" class="pbtn">◻ TRACERS: OFF</button>
       <div class="cr">
         <div class="cl"><span class="cn">TRACER COUNT</span><span class="cv" id="v-partCount">10,000</span></div>
         <input type="range" id="s-partCount" min="1000" max="20000" step="1000" value="10000">
@@ -611,6 +611,10 @@
     uniform vec2  u_flip;
     uniform float u_phys_regime;   /* 0=Noise Warp (Original), 1=Navier-Stokes, 2=Viscoelastic */
     uniform float u_vorticity;
+    uniform vec2  u_touch_pos1;
+    uniform vec2  u_touch_pos2;
+    uniform float u_touch_count;
+    uniform float u_pinch_force;
 
     /* Mode & Procedural Gradient uniforms */
     uniform float u_mode;          /* 0=gradient, 1=media, 2=gradient map */
@@ -685,6 +689,20 @@
         } else {
           wo = wo0;
         }
+      }
+
+      /* Multi-Touch Fluid Sinks & Twin Vortex Injectors */
+      if (u_touch_count > 1.5) {
+        vec2 mid = (u_touch_pos1 + u_touch_pos2) * 0.5;
+        vec2 dMid = lensUV - mid;
+        float rMid = length(dMid) + 0.04;
+        vec2 sinkVel = normalize(dMid) * (u_pinch_force / rMid);
+
+        vec2 d1 = lensUV - u_touch_pos1; float r1 = length(d1) + 0.06;
+        vec2 d2 = lensUV - u_touch_pos2; float r2 = length(d2) + 0.06;
+        vec2 twinSwirl = vec2(-d1.y, d1.x) / r1 - vec2(-d2.y, d2.x) / r2;
+
+        wo += (sinkVel + twinSwirl * 0.15);
       }
 
       vec2 warpedUV = lensUV + wo * (u_warp_amount + u_audio_pulse * 0.12);
@@ -790,6 +808,10 @@
     uniform float u_part_size;
     uniform float u_phys_regime;
     uniform float u_time;
+    uniform vec2  u_touch_pos1;
+    uniform vec2  u_touch_pos2;
+    uniform float u_touch_count;
+    uniform float u_pinch_force;
 
     varying float v_alpha;
     varying float v_seed;
@@ -806,6 +828,14 @@
         vec2 pFine = a_pPos * (u_noise_scale * 1.8) + shift * 2.0;
         float curl = noise(pFine + vec2(vel.y, vel.x) * 3.0) - noise(pFine - vec2(vel.y, vel.x) * 3.0);
         vel += vec2(-curl, curl) * 0.8;
+      }
+
+      if (u_touch_count > 1.5) {
+        vec2 mid = (u_touch_pos1 + u_touch_pos2) * 0.5;
+        vec2 dMid = a_pPos - mid;
+        float rMid = length(dMid) + 0.04;
+        vec2 sinkVel = normalize(dMid) * (u_pinch_force / rMid);
+        vel += sinkVel * 2.0;
       }
 
       /* Stream particles along fluid velocity vector */
@@ -899,6 +929,10 @@
 
   const uPhysRegime  = gl.getUniformLocation(prog, 'u_phys_regime');
   const uVorticity   = gl.getUniformLocation(prog, 'u_vorticity');
+  const uTouchPos1   = gl.getUniformLocation(prog, 'u_touch_pos1');
+  const uTouchPos2   = gl.getUniformLocation(prog, 'u_touch_pos2');
+  const uTouchCount  = gl.getUniformLocation(prog, 'u_touch_count');
+  const uPinchForce  = gl.getUniformLocation(prog, 'u_pinch_force');
 
   const uMode        = gl.getUniformLocation(prog, 'u_mode');
   const uStopCol     = gl.getUniformLocation(prog, 'u_stop_col[0]');
@@ -916,6 +950,10 @@
   const puPartSize   = gl.getUniformLocation(partProg, 'u_part_size');
   const puPhysRegime = gl.getUniformLocation(partProg, 'u_phys_regime');
   const puTime       = gl.getUniformLocation(partProg, 'u_time');
+  const puTouchPos1  = gl.getUniformLocation(partProg, 'u_touch_pos1');
+  const puTouchPos2  = gl.getUniformLocation(partProg, 'u_touch_pos2');
+  const puTouchCount = gl.getUniformLocation(partProg, 'u_touch_count');
+  const puPinchForce = gl.getUniformLocation(partProg, 'u_pinch_force');
 
   const vbuf = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, vbuf);
@@ -1043,10 +1081,20 @@
     } catch (e) { alert('Webcam access denied or unavailable.'); }
   });
 
-  /* ── Mouse / Touch Interactive Fluid Stirring ──────────────────────────── */
+  /* ── Mouse / Touch Interactive Fluid Stirring & Multi-Touch Sinks ─────── */
   let touchOffset = [0, 0];
   let isDragging = false;
   let lastTouch = [0, 0];
+
+  let touchCount = 0;
+  let touchPos1 = [0.5, 0.5];
+  let touchPos2 = [0.5, 0.5];
+  let initialPinchDist = 0;
+  let pinchForce = 0;
+
+  function getTouchUV(touch) {
+    return [touch.clientX / window.innerWidth, 1.0 - touch.clientY / window.innerHeight];
+  }
 
   function onPointerDown(px, py) {
     if (event && (event.target.closest('#panel') || event.target.closest('#topBar'))) return;
@@ -1070,14 +1118,50 @@
   window.addEventListener('mouseup',   onPointerUp);
 
   window.addEventListener('touchstart', e => {
-    if (e.touches.length === 1) onPointerDown(e.touches[0].clientX, e.touches[0].clientY);
+    if (e.touches.length === 1) {
+      onPointerDown(e.touches[0].clientX, e.touches[0].clientY);
+      touchCount = 1;
+      touchPos1 = getTouchUV(e.touches[0]);
+    } else if (e.touches.length >= 2) {
+      touchCount = 2;
+      touchPos1 = getTouchUV(e.touches[0]);
+      touchPos2 = getTouchUV(e.touches[1]);
+      const dx = e.touches[0].clientX - e.touches[1].clientX;
+      const dy = e.touches[0].clientY - e.touches[1].clientY;
+      initialPinchDist = Math.hypot(dx, dy);
+      pinchForce = 0;
+    }
   }, { passive: true });
 
   window.addEventListener('touchmove', e => {
-    if (e.touches.length === 1) onPointerMove(e.touches[0].clientX, e.touches[0].clientY);
+    if (e.touches.length === 1) {
+      onPointerMove(e.touches[0].clientX, e.touches[0].clientY);
+      touchCount = 1;
+      touchPos1 = getTouchUV(e.touches[0]);
+    } else if (e.touches.length >= 2) {
+      touchCount = 2;
+      touchPos1 = getTouchUV(e.touches[0]);
+      touchPos2 = getTouchUV(e.touches[1]);
+      const dx = e.touches[0].clientX - e.touches[1].clientX;
+      const dy = e.touches[0].clientY - e.touches[1].clientY;
+      const currentDist = Math.hypot(dx, dy);
+      if (initialPinchDist > 0) {
+        pinchForce = (currentDist - initialPinchDist) * 0.008;
+      }
+    }
   }, { passive: true });
 
-  window.addEventListener('touchend', onPointerUp);
+  window.addEventListener('touchend', e => {
+    if (e.touches.length === 0) {
+      onPointerUp();
+      touchCount = 0;
+      pinchForce = 0;
+    } else if (e.touches.length === 1) {
+      touchCount = 1;
+      touchPos1 = getTouchUV(e.touches[0]);
+      pinchForce = 0;
+    }
+  });
 
   /* ── Fit & Aspect Ratio ─────────────────────────────────────────────────── */
   let fitMode = 'fill';
@@ -1114,7 +1198,7 @@
   const DEFAULTS = {
     physRegime:0, // 0=Noise Warp (Original Mode preserved!), 1=Navier-Stokes, 2=Viscoelastic
     mode:0,       // 0=Gradient/Color Field, 1=Media, 2=Gradient Map
-    partOn:true, partCount:10000, partSize:4.0, partSpeed:1.0,
+    partOn:false, partCount:10000, partSize:4.0, partSpeed:1.0,
     vorticity:0.80, viscosity:0.985,
     noiseScale:2.5, warpAmt:0.36, warpSpd:0.02, warpScaleVar:0.0,
     scrollSpd:0.4, scrollMag:1.5,
@@ -1592,6 +1676,7 @@
     const viscDecay = P.viscosity !== undefined ? P.viscosity : 0.985;
     touchOffset[0] *= viscDecay;
     touchOffset[1] *= viscDecay;
+    pinchForce *= 0.92;
 
     /* Tile pan accumulation */
     if (P.tileEnabled && !frozen) {
@@ -1646,6 +1731,10 @@
     /* Upload uniforms */
     gl.uniform1f(uPhysRegime, P.physRegime);
     gl.uniform1f(uVorticity,  P.vorticity);
+    gl.uniform2f(uTouchPos1,  touchPos1[0], touchPos1[1]);
+    gl.uniform2f(uTouchPos2,  touchPos2[0], touchPos2[1]);
+    gl.uniform1f(uTouchCount, touchCount);
+    gl.uniform1f(uPinchForce, pinchForce);
 
     gl.uniform1f(uMode,      P.mode);
     gl.uniform2f(uRes,       canvas.width, canvas.height);
@@ -1691,6 +1780,10 @@
       gl.uniform1f(puPartSize,  P.partSize);
       gl.uniform1f(puPhysRegime,P.physRegime);
       gl.uniform1f(puTime,      gTime);
+      gl.uniform2f(puTouchPos1,  touchPos1[0], touchPos1[1]);
+      gl.uniform2f(puTouchPos2,  touchPos2[0], touchPos2[1]);
+      gl.uniform1f(puTouchCount, touchCount);
+      gl.uniform1f(puPinchForce, pinchForce);
 
       gl.enableVertexAttribArray(paPos);
       gl.bindBuffer(gl.ARRAY_BUFFER, pPosBuf);
