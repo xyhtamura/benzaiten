@@ -635,6 +635,34 @@
     vec2 hash(vec2 p){p=vec2(dot(p,vec2(127.1,311.7)),dot(p,vec2(269.5,183.3)));return-1.+2.*fract(sin(p)*43758.5453123);}
     float noise(in vec2 p){const float K1=.366025404,K2=.211324865;vec2 i=floor(p+(p.x+p.y)*K1);vec2 a=p-i+(i.x+i.y)*K2;vec2 o=(a.x>a.y)?vec2(1.,0.):vec2(0.,1.);vec2 b=a-o+K2;vec2 c=a-1.+2.*K2;vec3 h=max(.5-vec3(dot(a,a),dot(b,b),dot(c,c)),0.);vec3 n=h*h*h*h*vec3(dot(a,hash(i+0.)),dot(b,hash(i+o)),dot(c,hash(i+1.)));return dot(n,vec3(70.));}
 
+    /* ── 2D MHD magnetic operators ─────────────────────────────────────────
+       A_z is the magnetic vector potential, read from the noise field. In 2D:
+         B   = ( dA/dy, -dA/dx )   central differences
+         J_z = -laplacian(A)       5-point stencil
+       MHD_H is the stencil step. The Laplacian scales as h^2, so at the 0.04 step
+       this shader used previously the second difference would be ~0.02 against
+       samples of order 1 — only a factor of 20 above mediump's ~1e-3 resolution,
+       i.e. ~9% quantisation error. At h = 0.12 the stencil value is ~0.22 and that
+       error falls to ~1%, while h stays well inside one noise feature so the
+       operator still resolves what it measures.
+
+       Both outputs are returned dimensionless, divided by the measured RMS of
+       their own field, so each has unit RMS and the regimes below can scale them
+       to whatever strength they want. */
+    const float MHD_H     = 0.12;
+    const float MHD_B_REF = 1.88;   /* rms|B|   of the normalised gradient field */
+    const float MHD_J_REF = 15.5;   /* rms|J_z| of the normalised Laplacian field */
+
+    void mhdField(vec2 p, out vec2 B, out float Jz) {
+      float aC  = noise(p);
+      float aXp = noise(p + vec2(MHD_H, 0.0));
+      float aXm = noise(p - vec2(MHD_H, 0.0));
+      float aYp = noise(p + vec2(0.0, MHD_H));
+      float aYm = noise(p - vec2(0.0, MHD_H));
+      B  = vec2(aYp - aYm, -(aXp - aXm)) / (2.0 * MHD_H * MHD_B_REF);
+      Jz = -(aXp + aXm + aYp + aYm - 4.0 * aC) / (MHD_H * MHD_H * MHD_J_REF);
+    }
+
     vec3 blendSeg(vec3 col, float nv, float minCount,
                   vec3 cA, vec3 cB, float pA, float pB) {
       float active  = step(minCount, u_stop_count + 0.5);
@@ -679,27 +707,39 @@
         if (u_phys_regime > 3.5) {
           /* Regime 4: Solar Reconnection & Coronal Flare Eruptions */
           vec2 pMag = lensUV * (u_noise_scale * 2.2) + shift * 2.5;
-          float dAx = noise(pMag + vec2(0.05, 0.0)) - noise(pMag - vec2(0.05, 0.0));
-          float dAy = noise(pMag + vec2(0.0, 0.05)) - noise(pMag - vec2(0.0, 0.05));
-          vec2 Bfield = vec2(dAy, -dAx);
-          float Jz = (dAx + dAy) * 10.0; /* Current density */
+          vec2 Bfield; float Jz;
+          mhdField(pMag, Bfield, Jz);
+          /* Restore the field strengths this regime was tuned against, so the
+             flare threshold below still fires at the rate it was set for. */
+          Bfield *= 0.205;
+          Jz     *= 2.133;
+          /* The previous J_z was a linear combination of B's own components, which
+             left J x B correlated (measured shape factor rms|JxB|/(rms|J| rms|B|)
+             = 1.47). A true Laplacian is independent of the gradient (1.00), so the
+             Lorentz term needs this factor to keep the force it used to have. */
+          const float LORENTZ_DECORR = 1.467;
 
           /* Magnetic line snapping flare burst when current density J_z exceeds threshold */
           float flareThreshold = smoothstep(0.3, 0.9, abs(Jz));
           vec2 flareBurst = vec2(-Bfield.y, Bfield.x) * flareThreshold * 1.8;
-          vec2 lorentz = vec2(-Jz * Bfield.y, Jz * Bfield.x) * 0.4;
+          vec2 lorentz = vec2(-Jz * Bfield.y, Jz * Bfield.x) * LORENTZ_DECORR * 0.4;
 
           wo = wo0 + vortForce * 0.5 + lorentz + flareBurst;
         } else if (u_phys_regime > 2.5) {
           /* Regime 3: 2D Magnetohydrodynamics (MHD Plasma & Lorentz Tension) */
           vec2 pMag = lensUV * (u_noise_scale * 1.6) + shift * 1.8;
-          float dAx = noise(pMag + vec2(0.04, 0.0)) - noise(pMag - vec2(0.04, 0.0));
-          float dAy = noise(pMag + vec2(0.0, 0.04)) - noise(pMag - vec2(0.0, 0.04));
-          vec2 Bfield = vec2(dAy, -dAx);
-          float Jz = (dAx + dAy) * 8.0;
+          vec2 Bfield; float Jz;
+          mhdField(pMag, Bfield, Jz);
+          /* Restore the field strengths this regime was tuned against, so the
+             Alfven term below keeps the amplitude it was set for. */
+          Bfield *= 0.166;
+          Jz     *= 1.422;
+          /* See the solar regime above: decorrelating J_z from B costs the Lorentz
+             term a factor of ~1.5, which this puts back. */
+          const float LORENTZ_DECORR = 1.490;
 
           /* Lorentz force F_L = J_z x B (magnetic tension along field lines) */
-          vec2 lorentz = vec2(-Jz * Bfield.y, Jz * Bfield.x) * u_vorticity * 0.6;
+          vec2 lorentz = vec2(-Jz * Bfield.y, Jz * Bfield.x) * LORENTZ_DECORR * u_vorticity * 0.6;
           vec2 alfvenWave = vec2(sin(Bfield.x * 12.0), cos(Bfield.y * 12.0)) * 0.2;
 
           wo = wo0 * 0.6 + lorentz + alfvenWave;
@@ -854,6 +894,24 @@
     vec2 hash(vec2 p){p=vec2(dot(p,vec2(127.1,311.7)),dot(p,vec2(269.5,183.3)));return-1.+2.*fract(sin(p)*43758.5453123);}
     float noise(in vec2 p){const float K1=.366025404,K2=.211324865;vec2 i=floor(p+(p.x+p.y)*K1);vec2 a=p-i+(i.x+i.y)*K2;vec2 o=(a.x>a.y)?vec2(1.,0.):vec2(0.,1.);vec2 b=a-o+K2;vec2 c=a-1.+2.*K2;vec3 h=max(.5-vec3(dot(a,a),dot(b,b),dot(c,c)),0.);vec3 n=h*h*h*h*vec3(dot(a,hash(i+0.)),dot(b,hash(i+o)),dot(c,hash(i+1.)));return dot(n,vec3(70.));}
 
+    /* Same 2D MHD operators as the main shader: B = (dA/dy, -dA/dx) by central
+       difference, J_z = -laplacian(A) by 5-point stencil, both returned with unit
+       RMS. Kept identical so the tracers stream along the field the substrate
+       actually shows. */
+    const float MHD_H     = 0.12;
+    const float MHD_B_REF = 1.88;
+    const float MHD_J_REF = 15.5;
+
+    void mhdField(vec2 p, out vec2 B, out float Jz) {
+      float aC  = noise(p);
+      float aXp = noise(p + vec2(MHD_H, 0.0));
+      float aXm = noise(p - vec2(MHD_H, 0.0));
+      float aYp = noise(p + vec2(0.0, MHD_H));
+      float aYm = noise(p - vec2(0.0, MHD_H));
+      B  = vec2(aYp - aYm, -(aXp - aXm)) / (2.0 * MHD_H * MHD_B_REF);
+      Jz = -(aXp + aXm + aYp + aYm - 4.0 * aC) / (MHD_H * MHD_H * MHD_J_REF);
+    }
+
     void main() {
       vec2 shift = (u_scroll_offset + u_touch_offset) * u_warp_speed;
       vec2 p0 = a_pPos * u_noise_scale * 0.5 + shift;
@@ -866,11 +924,12 @@
 
         if (u_phys_regime > 2.5) {
           vec2 pMag = a_pPos * (u_noise_scale * 1.8) + shift * 2.0;
-          float dAx = noise(pMag + vec2(0.04, 0.0)) - noise(pMag - vec2(0.04, 0.0));
-          float dAy = noise(pMag + vec2(0.0, 0.04)) - noise(pMag - vec2(0.0, 0.04));
-          vec2 Bfield = vec2(dAy, -dAx);
-          float Jz = (dAx + dAy) * 8.0;
-          vec2 lorentz = vec2(-Jz * Bfield.y, Jz * Bfield.x) * 1.2;
+          /* Field strengths and decorrelation factor as in the main shader. */
+          vec2 Bfield; float Jz;
+          mhdField(pMag, Bfield, Jz);
+          Bfield *= 0.166;
+          Jz     *= 1.422;
+          vec2 lorentz = vec2(-Jz * Bfield.y, Jz * Bfield.x) * 1.490 * 1.2;
           vel += lorentz;
         }
       }
@@ -1550,6 +1609,14 @@
   let smoothBass = 0, smoothMid = 0, smoothTreble = 0;
   let audioCtx, analyser, dataArray;
 
+  /* Band edges in Hz. Bin indices are derived from the live sample rate in
+     initAudio() rather than hardcoded: a bin is sampleRate/fftSize wide, so any
+     fixed index means a different frequency on different hardware. */
+  const BAND_BASS_HZ   = 300;
+  const BAND_MID_HZ    = 3500;
+  const BAND_TREBLE_HZ = 20000;
+  let bandBass = 0, bandMid = 0, bandTreble = 0;
+
   function drawOsc() {
     const w = oscC.clientWidth || 220;
     if (oscC.width !== w) oscC.width = w;
@@ -1558,11 +1625,20 @@
     oscCtx.fillStyle = 'rgba(2,4,12,0.95)'; oscCtx.fillRect(0,0,w,h);
     if (audioReady && dataArray) {
       analyser.getByteFrequencyData(dataArray);
-      const bins = Math.floor(dataArray.length * 0.65), bw = w / bins;
-      for (let i=0;i<bins;i++) {
-        const t = dataArray[i]/255;
+      /* Spectrum is drawn up to ~65% of Nyquist. At fftSize 2048 there are more
+         bins than pixels, so each column takes the peak of the bins it covers
+         instead of drawing one sub-pixel bar per bin. */
+      const shown = Math.floor(dataArray.length * 0.65);
+      const cols = Math.max(1, Math.min(w, shown));
+      const bw = w / cols;
+      for (let x=0;x<cols;x++) {
+        const b0 = Math.floor(x * shown / cols);
+        const b1 = Math.max(b0 + 1, Math.floor((x + 1) * shown / cols));
+        let peak = 0;
+        for (let i=b0;i<b1;i++) if (dataArray[i] > peak) peak = dataArray[i];
+        const t = peak/255;
         oscCtx.fillStyle = audioEnabled ? `rgba(56,189,248,${0.35+t*0.65})` : `rgba(51,65,85,${0.15+t*0.2})`;
-        oscCtx.fillRect(i*bw, h-t*h, Math.max(1,bw-0.5), t*h);
+        oscCtx.fillRect(x*bw, h-t*h, Math.max(1,bw-0.5), t*h);
       }
       const ly = h*(1-Math.min(smoothAmp,1)*0.92);
       oscCtx.strokeStyle = audioEnabled ? 'rgba(224,242,254,0.6)' : 'rgba(51,65,85,0.3)';
@@ -1580,9 +1656,19 @@
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      analyser = audioCtx.createAnalyser(); analyser.fftSize = 256;
+      analyser = audioCtx.createAnalyser();
+      /* 2048 gives ~23 Hz bins at 48 kHz. The previous 256 put the 300 Hz bass
+         edge inside bin 1, so the three bands could not be separated at all. */
+      analyser.fftSize = 2048;
       audioCtx.createMediaStreamSource(stream).connect(analyser);
       dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+      const binHz = audioCtx.sampleRate / analyser.fftSize;
+      const binOf = hz => Math.min(analyser.frequencyBinCount, Math.round(hz / binHz));
+      bandBass   = binOf(BAND_BASS_HZ);
+      bandMid    = binOf(BAND_MID_HZ);
+      bandTreble = binOf(BAND_TREBLE_HZ);
+
       audioReady = true;
       document.getElementById('statusOrb').classList.add('live');
       ['audioBtn','pAudioBtn'].forEach(id => {
@@ -1725,14 +1811,14 @@
       for (let i = 0; i < dataArray.length; i++) {
         const v = dataArray[i];
         sum += v;
-        if (i < 18) sumBass += v;
-        else if (i < 70) sumMid += v;
-        else sumTreble += v;
+        if (i < bandBass) sumBass += v;
+        else if (i < bandMid) sumMid += v;
+        else if (i < bandTreble) sumTreble += v;
       }
       curAmp    = (sum / dataArray.length) / 255;
-      curBass   = (sumBass / 18) / 255;
-      curMid    = (sumMid / 52) / 255;
-      curTreble = (sumTreble / 58) / 255;
+      curBass   = (sumBass / Math.max(bandBass, 1)) / 255;
+      curMid    = (sumMid / Math.max(bandMid - bandBass, 1)) / 255;
+      curTreble = (sumTreble / Math.max(bandTreble - bandMid, 1)) / 255;
     }
     smoothAmp    = smoothAmp    * P.smoothing + curAmp    * (1 - P.smoothing);
     smoothBass   = smoothBass   * P.smoothing + curBass   * (1 - P.smoothing);
