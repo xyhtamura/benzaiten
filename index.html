@@ -641,13 +641,16 @@
     void main() {
       vec2 vel = texture2D(u_velocity, v_uv).xy;
 
-      /* 1. Vorticity Confinement & Swirl Force */
+      /* 1. Curl-driven swirl force. This is not vorticity confinement in the
+         Fedkiw sense — that is eps*h*(N x omega) with N = grad|omega|/|grad|omega||,
+         which concentrates existing vortices. This just pushes along the local
+         curl, which adds swirl but does not preserve vortex structure. */
       float L = texture2D(u_velocity, v_uv - vec2(u_texelSize.x, 0.0)).y;
       float R = texture2D(u_velocity, v_uv + vec2(u_texelSize.x, 0.0)).y;
       float B = texture2D(u_velocity, v_uv - vec2(0.0, u_texelSize.y)).x;
       float T = texture2D(u_velocity, v_uv + vec2(0.0, u_texelSize.y)).x;
       float curl = (R - L) - (T - B);
-      vec2 vortForce = vec2(-curl, curl) * u_vorticity * 0.4;
+      vec2 swirlForce = vec2(-curl, curl) * u_vorticity * 0.4;
 
       /* 2. Drag & Stirring Force */
       float dDist = length(v_uv - u_dragPos);
@@ -679,7 +682,7 @@
         float aXm = texture2D(u_mhd, v_uv - vec2(u_texelSize.x, 0.0)).r;
         float aYp = texture2D(u_mhd, v_uv + vec2(0.0, u_texelSize.y)).r;
         float aYm = texture2D(u_mhd, v_uv - vec2(0.0, u_texelSize.y)).r;
-        vec2 Bfield = vec2(aYp - aYm, -(aXp - aXm)) / (2.0 * u_texelSize.x + 0.0001);
+        vec2 Bfield = vec2(aYp - aYm, -(aXp - aXm)) / (2.0 * u_texelSize.x);
 
         /* Lorentz Force FL = Jz x B = (-Jz * By, Jz * Bx) */
         vec2 lorentz = vec2(-Jz * Bfield.y, Jz * Bfield.x) * 0.6;
@@ -697,7 +700,7 @@
       }
 
       /* Combine Forces */
-      vec2 totalForce = vortForce + dragForce + touchForce + mhdForce;
+      vec2 totalForce = swirlForce + dragForce + touchForce + mhdForce;
       if (u_physRegime > 1.5 && u_physRegime < 2.5) {
         /* Viscoelastic Shear-Thinning */
         float strain = length(totalForce) + 0.001;
@@ -727,32 +730,49 @@
     vec2 hash(vec2 p){p=vec2(dot(p,vec2(127.1,311.7)),dot(p,vec2(269.5,183.3)));return-1.+2.*fract(sin(p)*43758.5453123);}
     float noise(in vec2 p){const float K1=.366025404,K2=.211324865;vec2 i=floor(p+(p.x+p.y)*K1);vec2 a=p-i+(i.x+i.y)*K2;vec2 o=(a.x>a.y)?vec2(1.,0.):vec2(0.,1.);vec2 b=a-o+K2;vec2 c=a-1.+2.*K2;vec3 h=max(.5-vec3(dot(a,a),dot(b,b),dot(c,c)),0.);vec3 n=h*h*h*h*vec3(dot(a,hash(i+0.)),dot(b,hash(i+o)),dot(c,hash(i+1.)));return dot(n,vec3(70.));}
 
+    /* Fraction of Az replaced by the noise seed each frame. See the note below —
+       this is an instrument term, not part of the induction equation. */
+    const float SEED_MIX = 0.02;
+    /* Reference current density. Jz is stored divided by this so the value in the
+       texture is O(1) and the flare threshold downstream reads in units of it. */
+    const float J_REF = 1000.0;
+
     void main() {
       vec2 vel = texture2D(u_velocity, v_uv).xy;
 
-      /* Advect Az along velocity field */
+      /* Semi-Lagrangian transport of Az along the velocity field. u_velocity is in
+         texels/second, so the backtrace is dt * texelSize * vel in UV. */
       vec2 backCoord = v_uv - u_dt * u_texelSize * vel;
       float Az_adv = texture2D(u_mhd, backCoord).r;
 
-      /* Background seed induction from noise field */
+      /* Relaxation toward a drifting noise field. This is NOT part of the induction
+         equation — it is an instrument term that keeps the field alive and stops it
+         settling. At SEED_MIX per frame its time constant is ~50 frames (0.83 s at
+         60 FPS), which is currently far faster than the advective transport beside
+         it, so it dominates what Az looks like. physics/GAPS.md records what that
+         costs and why the entry is still earmarked. */
       vec2 pSeed = v_uv * u_noiseScale * 1.5 + u_scrollOffset * u_warpSpeed;
       float Az_seed = noise(pSeed);
-      Az_adv = mix(Az_adv, Az_seed, 0.02);
+      Az_adv = mix(Az_adv, Az_seed, SEED_MIX);
 
-      /* Compute 5-point Laplacian of Az to obtain current density Jz = -Laplacian(Az) */
-      float aC  = Az_adv;
+      /* 5-point Laplacian of Az at step n. The centre has to come from the same
+         field as the neighbours: using the advected, seed-mixed centre here would
+         make this the Laplacian of no single field. */
+      float aC  = texture2D(u_mhd, v_uv).r;
       float aXp = texture2D(u_mhd, v_uv + vec2(u_texelSize.x, 0.0)).r;
       float aXm = texture2D(u_mhd, v_uv - vec2(u_texelSize.x, 0.0)).r;
       float aYp = texture2D(u_mhd, v_uv + vec2(0.0, u_texelSize.y)).r;
       float aYm = texture2D(u_mhd, v_uv - vec2(0.0, u_texelSize.y)).r;
 
       float laplacian = (aXp + aXm + aYp + aYm - 4.0 * aC) / (u_texelSize.x * u_texelSize.x);
-      float Jz = -laplacian * 0.001;
+      float Jz = -laplacian / J_REF;
 
-      /* Apply magnetic diffusion: dAz/dt += eta * Laplacian(Az) */
-      float Az_new = Az_adv + u_dt * u_diffusivity * laplacian * 0.0001;
+      /* Explicit magnetic diffusion: Az += dt * eta * laplacian(Az). u_diffusivity
+         is a true diffusivity in UV^2/s — the dimensionless diffusion number
+         dt*eta/h^2 must stay under 0.25 to remain stable, and sits at ~0.084. */
+      float Az_new = Az_adv + u_dt * u_diffusivity * laplacian;
 
-      /* Output: Red = Az (Vector Potential), Green = Jz (Current Density) */
+      /* Output: Red = Az (vector potential), Green = Jz (current density / J_REF) */
       gl_FragColor = vec4(Az_new, Jz, 0.0, 1.0);
     }
   </script>
@@ -1174,6 +1194,23 @@
 
   /* ── GPGPU Framebuffers & Ping-Pong Setup ($256 \times 256$ Grid) ────────── */
   const SIM_RES = 256;
+
+  /* The simulation stores signed velocity and vector-potential values, so an
+     unsigned-byte fallback cannot represent the fields at all — it would clamp
+     every negative component to zero and run silently wrong rather than merely
+     coarse. Report once, plainly, rather than presenting a broken sim. */
+  let simSupported = true;
+  function simUnsupported(reason) {
+    if (!simSupported) return;
+    simSupported = false;
+    console.error('Benzaiten: GPGPU simulation unavailable — ' + reason);
+    setSrcInfo('GPGPU simulation unavailable on this device (' + reason + ')');
+  }
+  if (texType === gl.UNSIGNED_BYTE) simUnsupported('no float or half-float render target');
+  if (gl.getParameter(gl.MAX_VERTEX_TEXTURE_IMAGE_UNITS) < 1) {
+    console.warn('Benzaiten: no vertex texture units — particle tracers will not follow the fluid.');
+  }
+
   function createFBO(w, h) {
     const tex = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, tex);
@@ -1186,7 +1223,9 @@
     const fb = gl.createFramebuffer();
     gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    if (status !== gl.FRAMEBUFFER_COMPLETE) simUnsupported('framebuffer incomplete (0x' + status.toString(16) + ')');
     return { fb, tex, width: w, height: h };
   }
 
@@ -1201,7 +1240,6 @@
   }
 
   const velFBO   = createDoubleFBO(SIM_RES, SIM_RES);
-  const dyeFBO   = createDoubleFBO(SIM_RES, SIM_RES);
   const mhdFBO   = createDoubleFBO(SIM_RES, SIM_RES);
   const pressFBO = createDoubleFBO(SIM_RES, SIM_RES);
   const divFBO   = createFBO(SIM_RES, SIM_RES);
@@ -1946,6 +1984,7 @@
   }
 
   function runGPGPUSimulation(dt, effAmp, effBass, effMid, effTreble) {
+    if (!simSupported) return;
     const texelSize = [1.0 / SIM_RES, 1.0 / SIM_RES];
     const simDt = Math.min(dt, 0.033);
 
@@ -2001,7 +2040,9 @@
       gl.uniform1i(gl.getUniformLocation(inductProg, 'u_velocity'), 1);
       gl.uniform2f(gl.getUniformLocation(inductProg, 'u_texelSize'), texelSize[0], texelSize[1]);
       gl.uniform1f(gl.getUniformLocation(inductProg, 'u_dt'), simDt);
-      gl.uniform1f(gl.getUniformLocation(inductProg, 'u_diffusivity'), 0.8);
+      /* Magnetic diffusivity in UV^2/s. Diffusion number dt*eta/h^2 at h = 1/256
+         and dt = 1/60 is ~0.084; explicit diffusion goes unstable above 0.25. */
+      gl.uniform1f(gl.getUniformLocation(inductProg, 'u_diffusivity'), 8.0e-5);
       gl.uniform1f(gl.getUniformLocation(inductProg, 'u_time'), gTime);
       gl.uniform2f(gl.getUniformLocation(inductProg, 'u_scrollOffset'), sx, sy);
       gl.uniform1f(gl.getUniformLocation(inductProg, 'u_noiseScale'), P.noiseScale);
