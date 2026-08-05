@@ -156,7 +156,7 @@
 
     /* ── TOUCH-FRIENDLY SLIDERS ──────────────── */
     .cr { margin-bottom: 12px; }
-    .cl { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
+    .cl { display: flex; justify-between: space-between; align-items: baseline; margin-bottom: 6px; }
     .cn { font-size: 11px; font-weight: 500; letter-spacing: 0.05em; color: var(--text); }
     .cv { font-family: var(--font-mono); font-size: 11px; color: var(--val); min-width: 44px; text-align: right; }
     input[type=range] {
@@ -353,8 +353,8 @@
       <!-- REGIME SELECTOR -->
       <div class="sec">REGIME</div>
       <select id="s-physRegime" class="select-box">
-        <option value="0" selected>DOMAIN WARP (Original)</option>
-        <option value="1">NAVIER-STOKES (Fluid Dynamics)</option>
+        <option value="0" selected>DOMAIN WARP (Original Preserved)</option>
+        <option value="1">NAVIER-STOKES (GPGPU Fluid Dynamics)</option>
         <option value="2">VISCOELASTIC (Shear-Thinning Lava)</option>
         <option value="3">⚡ MHD PLASMA (Magnetohydrodynamics)</option>
         <option value="4">☀️ SOLAR RECONNECTION (Coronal Flares)</option>
@@ -585,16 +585,236 @@
 
   <div id="revDot" title="Click or tap to restore UI">◈ SHOW UI (U)</div>
 
-  <!-- SHADERS -->
-  <script id="vertex-shader" type="x-shader/x-vertex">
-    attribute vec4 a_position;
-    void main() { gl_Position = a_position; }
+  <!-- GPGPU SIMULATION & PRESENTATION SHADERS -->
+
+  <!-- Quad Vertex Shader -->
+  <script id="sim-vs" type="x-shader/x-vertex">
+    attribute vec2 a_position;
+    varying vec2 v_uv;
+    void main() {
+      v_uv = a_position * 0.5 + 0.5;
+      gl_Position = vec4(a_position, 0.0, 1.0);
+    }
   </script>
 
+  <!-- Pass 1: Advection Shader -->
+  <script id="advect-fs" type="x-shader/x-fragment">
+    precision highp float;
+    uniform sampler2D u_velocity;
+    uniform sampler2D u_source;
+    uniform vec2  u_texelSize;
+    uniform float u_dt;
+    uniform float u_dissipation;
+    varying vec2  v_uv;
+    void main() {
+      vec2 vel = texture2D(u_velocity, v_uv).xy;
+      vec2 coord = v_uv - u_dt * u_texelSize * vel;
+      gl_FragColor = u_dissipation * texture2D(u_source, coord);
+    }
+  </script>
+
+  <!-- Pass 2: Force & Interaction Shader -->
+  <script id="force-fs" type="x-shader/x-fragment">
+    precision highp float;
+    uniform sampler2D u_velocity;
+    uniform sampler2D u_mhd;
+    uniform vec2  u_texelSize;
+    uniform float u_dt;
+    uniform float u_physRegime;
+    uniform float u_vorticity;
+    uniform vec2  u_dragVel;
+    uniform vec2  u_dragPos;
+    uniform vec2  u_touchPos1;
+    uniform vec2  u_touchPos2;
+    uniform float u_touchCount;
+    uniform float u_pinchForce;
+    uniform float u_audioPulse;
+    uniform float u_time;
+    uniform float u_noiseScale;
+    uniform float u_warpSpeed;
+    uniform vec2  u_scrollOffset;
+    varying vec2  v_uv;
+
+    vec2 hash(vec2 p){p=vec2(dot(p,vec2(127.1,311.7)),dot(p,vec2(269.5,183.3)));return-1.+2.*fract(sin(p)*43758.5453123);}
+    float noise(in vec2 p){const float K1=.366025404,K2=.211324865;vec2 i=floor(p+(p.x+p.y)*K1);vec2 a=p-i+(i.x+i.y)*K2;vec2 o=(a.x>a.y)?vec2(1.,0.):vec2(0.,1.);vec2 b=a-o+K2;vec2 c=a-1.+2.*K2;vec3 h=max(.5-vec3(dot(a,a),dot(b,b),dot(c,c)),0.);vec3 n=h*h*h*h*vec3(dot(a,hash(i+0.)),dot(b,hash(i+o)),dot(c,hash(i+1.)));return dot(n,vec3(70.));}
+
+    void main() {
+      vec2 vel = texture2D(u_velocity, v_uv).xy;
+
+      /* 1. Vorticity Confinement & Swirl Force */
+      float L = texture2D(u_velocity, v_uv - vec2(u_texelSize.x, 0.0)).y;
+      float R = texture2D(u_velocity, v_uv + vec2(u_texelSize.x, 0.0)).y;
+      float B = texture2D(u_velocity, v_uv - vec2(0.0, u_texelSize.y)).x;
+      float T = texture2D(u_velocity, v_uv + vec2(0.0, u_texelSize.y)).x;
+      float curl = (R - L) - (T - B);
+      vec2 vortForce = vec2(-curl, curl) * u_vorticity * 0.4;
+
+      /* 2. Drag & Stirring Force */
+      float dDist = length(v_uv - u_dragPos);
+      vec2 dragForce = u_dragVel * exp(-dDist * dDist * 80.0) * 18.0;
+
+      /* 3. Multi-Touch Sinks & Sources */
+      vec2 touchForce = vec2(0.0);
+      if (u_touchCount > 1.5) {
+        vec2 mid = (u_touchPos1 + u_touchPos2) * 0.5;
+        vec2 dMid = v_uv - mid;
+        float rMid = length(dMid) + 0.04;
+        vec2 sinkVel = normalize(dMid) * (u_pinchForce / rMid);
+        vec2 d1 = v_uv - u_touchPos1; float r1 = length(d1) + 0.06;
+        vec2 d2 = v_uv - u_touchPos2; float r2 = length(d2) + 0.06;
+        vec2 twinSwirl = vec2(-d1.y, d1.x) / r1 - vec2(-d2.y, d2.x) / r2;
+        touchForce = sinkVel + twinSwirl * 0.15;
+      }
+
+      /* 4. Regime Specific Forces */
+      vec2 mhdForce = vec2(0.0);
+      if (u_physRegime > 2.5) {
+        /* Regimes 3 & 4: Read live magnetic vector potential Az and current density Jz */
+        vec4 mhdData = texture2D(u_mhd, v_uv);
+        float Az = mhdData.r;
+        float Jz = mhdData.g;
+
+        /* Calculate B = (dAz/dy, -dAz/dx) using central differences */
+        float aXp = texture2D(u_mhd, v_uv + vec2(u_texelSize.x, 0.0)).r;
+        float aXm = texture2D(u_mhd, v_uv - vec2(u_texelSize.x, 0.0)).r;
+        float aYp = texture2D(u_mhd, v_uv + vec2(0.0, u_texelSize.y)).r;
+        float aYm = texture2D(u_mhd, v_uv - vec2(0.0, u_texelSize.y)).r;
+        vec2 Bfield = vec2(aYp - aYm, -(aXp - aXm)) / (2.0 * u_texelSize.x + 0.0001);
+
+        /* Lorentz Force FL = Jz x B = (-Jz * By, Jz * Bx) */
+        vec2 lorentz = vec2(-Jz * Bfield.y, Jz * Bfield.x) * 0.6;
+
+        if (u_physRegime > 3.5) {
+          /* Solar Reconnection Eruptions */
+          float flareThreshold = smoothstep(0.25, 0.85, abs(Jz));
+          vec2 flareBurst = vec2(-Bfield.y, Bfield.x) * flareThreshold * 2.8;
+          mhdForce = lorentz * 0.8 + flareBurst;
+        } else {
+          /* MHD Plasma Tension & Alfven wave response */
+          vec2 alfven = vec2(sin(Bfield.x * 10.0), cos(Bfield.y * 10.0)) * 0.18;
+          mhdForce = lorentz + alfven;
+        }
+      }
+
+      /* Combine Forces */
+      vec2 totalForce = vortForce + dragForce + touchForce + mhdForce;
+      if (u_physRegime > 1.5 && u_physRegime < 2.5) {
+        /* Viscoelastic Shear-Thinning */
+        float strain = length(totalForce) + 0.001;
+        float shearVisc = clamp(1.0 / (1.0 + strain * 4.0), 0.2, 2.0);
+        totalForce *= shearVisc;
+      }
+
+      vec2 newVel = vel + totalForce * u_dt;
+      gl_FragColor = vec4(newVel, 0.0, 1.0);
+    }
+  </script>
+
+  <!-- Pass 3: MHD Magnetic Vector Potential Induction Shader -->
+  <script id="induction-fs" type="x-shader/x-fragment">
+    precision highp float;
+    uniform sampler2D u_mhd;
+    uniform sampler2D u_velocity;
+    uniform vec2  u_texelSize;
+    uniform float u_dt;
+    uniform float u_diffusivity;
+    uniform float u_time;
+    uniform vec2  u_scrollOffset;
+    uniform float u_noiseScale;
+    uniform float u_warpSpeed;
+    varying vec2  v_uv;
+
+    vec2 hash(vec2 p){p=vec2(dot(p,vec2(127.1,311.7)),dot(p,vec2(269.5,183.3)));return-1.+2.*fract(sin(p)*43758.5453123);}
+    float noise(in vec2 p){const float K1=.366025404,K2=.211324865;vec2 i=floor(p+(p.x+p.y)*K1);vec2 a=p-i+(i.x+i.y)*K2;vec2 o=(a.x>a.y)?vec2(1.,0.):vec2(0.,1.);vec2 b=a-o+K2;vec2 c=a-1.+2.*K2;vec3 h=max(.5-vec3(dot(a,a),dot(b,b),dot(c,c)),0.);vec3 n=h*h*h*h*vec3(dot(a,hash(i+0.)),dot(b,hash(i+o)),dot(c,hash(i+1.)));return dot(n,vec3(70.));}
+
+    void main() {
+      vec2 vel = texture2D(u_velocity, v_uv).xy;
+
+      /* Advect Az along velocity field */
+      vec2 backCoord = v_uv - u_dt * u_texelSize * vel;
+      float Az_adv = texture2D(u_mhd, backCoord).r;
+
+      /* Background seed induction from noise field */
+      vec2 pSeed = v_uv * u_noiseScale * 1.5 + u_scrollOffset * u_warpSpeed;
+      float Az_seed = noise(pSeed);
+      Az_adv = mix(Az_adv, Az_seed, 0.02);
+
+      /* Compute 5-point Laplacian of Az to obtain current density Jz = -Laplacian(Az) */
+      float aC  = Az_adv;
+      float aXp = texture2D(u_mhd, v_uv + vec2(u_texelSize.x, 0.0)).r;
+      float aXm = texture2D(u_mhd, v_uv - vec2(u_texelSize.x, 0.0)).r;
+      float aYp = texture2D(u_mhd, v_uv + vec2(0.0, u_texelSize.y)).r;
+      float aYm = texture2D(u_mhd, v_uv - vec2(0.0, u_texelSize.y)).r;
+
+      float laplacian = (aXp + aXm + aYp + aYm - 4.0 * aC) / (u_texelSize.x * u_texelSize.x);
+      float Jz = -laplacian * 0.001;
+
+      /* Apply magnetic diffusion: dAz/dt += eta * Laplacian(Az) */
+      float Az_new = Az_adv + u_dt * u_diffusivity * laplacian * 0.0001;
+
+      /* Output: Red = Az (Vector Potential), Green = Jz (Current Density) */
+      gl_FragColor = vec4(Az_new, Jz, 0.0, 1.0);
+    }
+  </script>
+
+  <!-- Pass 4: Divergence Shader -->
+  <script id="divergence-fs" type="x-shader/x-fragment">
+    precision highp float;
+    uniform sampler2D u_velocity;
+    uniform vec2  u_texelSize;
+    varying vec2  v_uv;
+    void main() {
+      float L = texture2D(u_velocity, v_uv - vec2(u_texelSize.x, 0.0)).x;
+      float R = texture2D(u_velocity, v_uv + vec2(u_texelSize.x, 0.0)).x;
+      float B = texture2D(u_velocity, v_uv - vec2(0.0, u_texelSize.y)).y;
+      float T = texture2D(u_velocity, v_uv + vec2(0.0, u_texelSize.y)).y;
+      float div = 0.5 * ((R - L) + (T - B));
+      gl_FragColor = vec4(div, 0.0, 0.0, 1.0);
+    }
+  </script>
+
+  <!-- Pass 5: Jacobi Pressure Poisson Solver Shader -->
+  <script id="jacobi-fs" type="x-shader/x-fragment">
+    precision highp float;
+    uniform sampler2D u_pressure;
+    uniform sampler2D u_divergence;
+    uniform vec2  u_texelSize;
+    varying vec2  v_uv;
+    void main() {
+      float L = texture2D(u_pressure, v_uv - vec2(u_texelSize.x, 0.0)).x;
+      float R = texture2D(u_pressure, v_uv + vec2(u_texelSize.x, 0.0)).x;
+      float B = texture2D(u_pressure, v_uv - vec2(0.0, u_texelSize.y)).x;
+      float T = texture2D(u_pressure, v_uv + vec2(0.0, u_texelSize.y)).x;
+      float div = texture2D(u_divergence, v_uv).x;
+      float p = 0.25 * (L + R + B + T - div);
+      gl_FragColor = vec4(p, 0.0, 0.0, 1.0);
+    }
+  </script>
+
+  <!-- Pass 6: Pressure Projection Gradient Subtraction Shader -->
+  <script id="gradsub-fs" type="x-shader/x-fragment">
+    precision highp float;
+    uniform sampler2D u_pressure;
+    uniform sampler2D u_velocity;
+    uniform vec2  u_texelSize;
+    varying vec2  v_uv;
+    void main() {
+      float L = texture2D(u_pressure, v_uv - vec2(u_texelSize.x, 0.0)).x;
+      float R = texture2D(u_pressure, v_uv + vec2(u_texelSize.x, 0.0)).x;
+      float B = texture2D(u_pressure, v_uv - vec2(0.0, u_texelSize.y)).x;
+      float T = texture2D(u_pressure, v_uv + vec2(0.0, u_texelSize.y)).x;
+      vec2 vel = texture2D(u_velocity, v_uv).xy;
+      vel -= 0.5 * vec2(R - L, T - B);
+      gl_FragColor = vec4(vel, 0.0, 1.0);
+    }
+  </script>
+
+  <!-- Main Screen Presentation Fragment Shader -->
   <script id="fragment-shader" type="x-shader/x-fragment">
-    precision mediump float;
+    precision highp float;
 
     uniform sampler2D u_image;
+    uniform sampler2D u_velTex;
     uniform vec2  u_resolution;
     uniform vec2  u_scroll_offset;
     uniform vec2  u_touch_offset;
@@ -617,7 +837,7 @@
     uniform float u_audio_pulse;
     uniform float u_rotate;
     uniform vec2  u_flip;
-    uniform float u_phys_regime;   /* 0=Noise Warp (Original), 1=Navier-Stokes, 2=Viscoelastic */
+    uniform float u_phys_regime;   /* 0=Original Noise Warp, 1=Navier-Stokes GPGPU, 2=Viscoelastic, 3=MHD, 4=Solar */
     uniform float u_vorticity;
     uniform vec2  u_touch_pos1;
     uniform vec2  u_touch_pos2;
@@ -634,34 +854,6 @@
     vec3 hsv2rgb(vec3 c){vec4 K=vec4(1.,2./3.,1./3.,3.);vec3 p=abs(fract(c.xxx+K.xyz)*6.-K.www);return c.z*mix(K.xxx,clamp(p-K.xxx,0.,1.),c.y);}
     vec2 hash(vec2 p){p=vec2(dot(p,vec2(127.1,311.7)),dot(p,vec2(269.5,183.3)));return-1.+2.*fract(sin(p)*43758.5453123);}
     float noise(in vec2 p){const float K1=.366025404,K2=.211324865;vec2 i=floor(p+(p.x+p.y)*K1);vec2 a=p-i+(i.x+i.y)*K2;vec2 o=(a.x>a.y)?vec2(1.,0.):vec2(0.,1.);vec2 b=a-o+K2;vec2 c=a-1.+2.*K2;vec3 h=max(.5-vec3(dot(a,a),dot(b,b),dot(c,c)),0.);vec3 n=h*h*h*h*vec3(dot(a,hash(i+0.)),dot(b,hash(i+o)),dot(c,hash(i+1.)));return dot(n,vec3(70.));}
-
-    /* ── 2D MHD magnetic operators ─────────────────────────────────────────
-       A_z is the magnetic vector potential, read from the noise field. In 2D:
-         B   = ( dA/dy, -dA/dx )   central differences
-         J_z = -laplacian(A)       5-point stencil
-       MHD_H is the stencil step. The Laplacian scales as h^2, so at the 0.04 step
-       this shader used previously the second difference would be ~0.02 against
-       samples of order 1 — only a factor of 20 above mediump's ~1e-3 resolution,
-       i.e. ~9% quantisation error. At h = 0.12 the stencil value is ~0.22 and that
-       error falls to ~1%, while h stays well inside one noise feature so the
-       operator still resolves what it measures.
-
-       Both outputs are returned dimensionless, divided by the measured RMS of
-       their own field, so each has unit RMS and the regimes below can scale them
-       to whatever strength they want. */
-    const float MHD_H     = 0.12;
-    const float MHD_B_REF = 1.88;   /* rms|B|   of the normalised gradient field */
-    const float MHD_J_REF = 15.5;   /* rms|J_z| of the normalised Laplacian field */
-
-    void mhdField(vec2 p, out vec2 B, out float Jz) {
-      float aC  = noise(p);
-      float aXp = noise(p + vec2(MHD_H, 0.0));
-      float aXm = noise(p - vec2(MHD_H, 0.0));
-      float aYp = noise(p + vec2(0.0, MHD_H));
-      float aYm = noise(p - vec2(0.0, MHD_H));
-      B  = vec2(aYp - aYm, -(aXp - aXm)) / (2.0 * MHD_H * MHD_B_REF);
-      Jz = -(aXp + aXm + aYp + aYm - 4.0 * aC) / (MHD_H * MHD_H * MHD_J_REF);
-    }
 
     vec3 blendSeg(vec3 col, float nv, float minCount,
                   vec3 cA, vec3 cB, float pA, float pB) {
@@ -691,93 +883,18 @@
       float r2 = dot(lc, lc);
       vec2 lensUV = lc * (1.0 + u_lens_amount * r2) + 0.5;
 
-      /* 2. Physics Regimes (0=Domain Warp Original, 1=Navier-Stokes, 2=Viscoelastic) */
-      vec2 sc = u_scroll_offset + u_touch_offset;
-      vec2 shift = sc * u_warp_speed;
-      vec2 p0 = lensUV * u_noise_scale * 0.5 + shift;
-      vec2 wo0 = vec2(noise(p0), noise(p0 + 10.0));
+      /* 2. Sample live GPGPU solenoidal velocity vector */
+      vec2 gpgpuVel = texture2D(u_velTex, lensUV).xy;
 
       vec2 wo;
       if (u_phys_regime > 0.5) {
-        /* Navier-Stokes hydrodynamics: calculate curl vorticity + momentum field */
-        vec2 pFine = lensUV * (u_noise_scale * 1.8) + shift * 2.0;
-        float curl = noise(pFine + vec2(wo0.y, wo0.x) * 3.0) - noise(pFine - vec2(wo0.y, wo0.x) * 3.0);
-        vec2 vortForce = vec2(-curl, curl) * u_vorticity * 0.5;
-
-        if (u_phys_regime > 3.5) {
-          /* Regime 4: Solar Reconnection & Coronal Flare Eruptions */
-          vec2 pMag = lensUV * (u_noise_scale * 2.2) + shift * 2.5;
-          vec2 Bfield; float Jz;
-          mhdField(pMag, Bfield, Jz);
-          /* Restore the field strengths this regime was tuned against, so the
-             flare threshold below still fires at the rate it was set for. */
-          Bfield *= 0.205;
-          Jz     *= 2.133;
-          /* The previous J_z was a linear combination of B's own components, which
-             left J x B correlated (measured shape factor rms|JxB|/(rms|J| rms|B|)
-             = 1.47). A true Laplacian is independent of the gradient (1.00), so the
-             Lorentz term needs this factor to keep the force it used to have. */
-          const float LORENTZ_DECORR = 1.467;
-
-          /* Magnetic line snapping flare burst when current density J_z exceeds threshold */
-          float flareThreshold = smoothstep(0.3, 0.9, abs(Jz));
-          vec2 flareBurst = vec2(-Bfield.y, Bfield.x) * flareThreshold * 1.8;
-          vec2 lorentz = vec2(-Jz * Bfield.y, Jz * Bfield.x) * LORENTZ_DECORR * 0.4;
-
-          wo = wo0 + vortForce * 0.5 + lorentz + flareBurst;
-        } else if (u_phys_regime > 2.5) {
-          /* Regime 3: 2D Magnetohydrodynamics (MHD Plasma & Lorentz Tension) */
-          vec2 pMag = lensUV * (u_noise_scale * 1.6) + shift * 1.8;
-          vec2 Bfield; float Jz;
-          mhdField(pMag, Bfield, Jz);
-          /* Restore the field strengths this regime was tuned against, so the
-             Alfven term below keeps the amplitude it was set for. */
-          Bfield *= 0.166;
-          Jz     *= 1.422;
-          /* See the solar regime above: decorrelating J_z from B costs the Lorentz
-             term a factor of ~1.5, which this puts back. */
-          const float LORENTZ_DECORR = 1.490;
-
-          /* Lorentz force F_L = J_z x B (magnetic tension along field lines) */
-          vec2 lorentz = vec2(-Jz * Bfield.y, Jz * Bfield.x) * LORENTZ_DECORR * u_vorticity * 0.6;
-          vec2 alfvenWave = vec2(sin(Bfield.x * 12.0), cos(Bfield.y * 12.0)) * 0.2;
-
-          wo = wo0 * 0.6 + lorentz + alfvenWave;
-        } else if (u_phys_regime > 1.5) {
-          /* Regime 2: Viscoelastic shear-thinning */
-          float strain = length(vortForce) + 0.001;
-          float shearVisc = clamp(1.0 / (1.0 + strain * 5.0), 0.2, 2.0);
-          wo = mix(wo0 + vortForce, (wo0 + vortForce) * shearVisc, 0.6);
-        } else {
-          /* Regime 1: Navier-Stokes */
-          wo = wo0 + vortForce;
-        }
+        wo = gpgpuVel * 0.45;
       } else {
-        /* Original Multi-Scale Noise Domain Warp Mode */
-        if (u_warp_scale_var > 0.001) {
-          vec2 pFine = lensUV * (u_noise_scale * 1.4) + shift * 1.5;
-          vec2 pMask = lensUV * (u_noise_scale * 0.2) + shift * 0.4;
-          vec2 woFine = vec2(noise(pFine), noise(pFine + 15.0));
-          float pocketMask = smoothstep(0.25, 0.75, noise(pMask + 25.0) * 0.5 + 0.5);
-          vec2 woMulti = mix(wo0, wo0 * 0.4 + woFine * (0.3 + 0.7 * pocketMask), u_warp_scale_var);
-          wo = woMulti;
-        } else {
-          wo = wo0;
-        }
-      }
-
-      /* Multi-Touch Fluid Sinks & Twin Vortex Injectors */
-      if (u_touch_count > 1.5) {
-        vec2 mid = (u_touch_pos1 + u_touch_pos2) * 0.5;
-        vec2 dMid = lensUV - mid;
-        float rMid = length(dMid) + 0.04;
-        vec2 sinkVel = normalize(dMid) * (u_pinch_force / rMid);
-
-        vec2 d1 = lensUV - u_touch_pos1; float r1 = length(d1) + 0.06;
-        vec2 d2 = lensUV - u_touch_pos2; float r2 = length(d2) + 0.06;
-        vec2 twinSwirl = vec2(-d1.y, d1.x) / r1 - vec2(-d2.y, d2.x) / r2;
-
-        wo += (sinkVel + twinSwirl * 0.15);
+        /* Regime 0: Original Noise Warp Preserved */
+        vec2 sc = u_scroll_offset + u_touch_offset;
+        vec2 shift = sc * u_warp_speed;
+        vec2 p0 = lensUV * u_noise_scale * 0.5 + shift;
+        wo = vec2(noise(p0), noise(p0 + 10.0));
       }
 
       vec2 warpedUV = lensUV + wo * (u_warp_amount + u_audio_pulse * 0.12);
@@ -847,7 +964,6 @@
           /* Mode 2: Hybrid Gradient Map */
           float nv = (noise(warpedUV * u_noise_scale + u_scroll_offset + u_touch_offset) + 1.0) * 0.5;
           float lum = dot(texCol, vec3(0.299, 0.587, 0.114));
-          /* Dynamically cycle gradient ramp through image contours + fluid noise drift */
           float gradVal = fract(lum + nv * 0.5);
           col = evalGradient(gradVal);
         } else {
@@ -875,6 +991,7 @@
     attribute vec2 a_pPos;
     attribute float a_pSeed;
 
+    uniform sampler2D u_velTex;
     uniform vec2  u_scroll_offset;
     uniform vec2  u_touch_offset;
     uniform float u_noise_scale;
@@ -894,56 +1011,18 @@
     vec2 hash(vec2 p){p=vec2(dot(p,vec2(127.1,311.7)),dot(p,vec2(269.5,183.3)));return-1.+2.*fract(sin(p)*43758.5453123);}
     float noise(in vec2 p){const float K1=.366025404,K2=.211324865;vec2 i=floor(p+(p.x+p.y)*K1);vec2 a=p-i+(i.x+i.y)*K2;vec2 o=(a.x>a.y)?vec2(1.,0.):vec2(0.,1.);vec2 b=a-o+K2;vec2 c=a-1.+2.*K2;vec3 h=max(.5-vec3(dot(a,a),dot(b,b),dot(c,c)),0.);vec3 n=h*h*h*h*vec3(dot(a,hash(i+0.)),dot(b,hash(i+o)),dot(c,hash(i+1.)));return dot(n,vec3(70.));}
 
-    /* Same 2D MHD operators as the main shader: B = (dA/dy, -dA/dx) by central
-       difference, J_z = -laplacian(A) by 5-point stencil, both returned with unit
-       RMS. Kept identical so the tracers stream along the field the substrate
-       actually shows. */
-    const float MHD_H     = 0.12;
-    const float MHD_B_REF = 1.88;
-    const float MHD_J_REF = 15.5;
-
-    void mhdField(vec2 p, out vec2 B, out float Jz) {
-      float aC  = noise(p);
-      float aXp = noise(p + vec2(MHD_H, 0.0));
-      float aXm = noise(p - vec2(MHD_H, 0.0));
-      float aYp = noise(p + vec2(0.0, MHD_H));
-      float aYm = noise(p - vec2(0.0, MHD_H));
-      B  = vec2(aYp - aYm, -(aXp - aXm)) / (2.0 * MHD_H * MHD_B_REF);
-      Jz = -(aXp + aXm + aYp + aYm - 4.0 * aC) / (MHD_H * MHD_H * MHD_J_REF);
-    }
-
     void main() {
-      vec2 shift = (u_scroll_offset + u_touch_offset) * u_warp_speed;
-      vec2 p0 = a_pPos * u_noise_scale * 0.5 + shift;
-      vec2 vel = vec2(noise(p0), noise(p0 + 10.0));
+      vec2 uv = (a_pPos + 1.0) * 0.5;
+      vec2 vel = texture2D(u_velTex, uv).xy;
 
-      if (u_phys_regime > 0.5) {
-        vec2 pFine = a_pPos * (u_noise_scale * 1.8) + shift * 2.0;
-        float curl = noise(pFine + vec2(vel.y, vel.x) * 3.0) - noise(pFine - vec2(vel.y, vel.x) * 3.0);
-        vel += vec2(-curl, curl) * 0.8;
-
-        if (u_phys_regime > 2.5) {
-          vec2 pMag = a_pPos * (u_noise_scale * 1.8) + shift * 2.0;
-          /* Field strengths and decorrelation factor as in the main shader. */
-          vec2 Bfield; float Jz;
-          mhdField(pMag, Bfield, Jz);
-          Bfield *= 0.166;
-          Jz     *= 1.422;
-          vec2 lorentz = vec2(-Jz * Bfield.y, Jz * Bfield.x) * 1.490 * 1.2;
-          vel += lorentz;
-        }
-      }
-
-      if (u_touch_count > 1.5) {
-        vec2 mid = (u_touch_pos1 + u_touch_pos2) * 0.5;
-        vec2 dMid = a_pPos - mid;
-        float rMid = length(dMid) + 0.04;
-        vec2 sinkVel = normalize(dMid) * (u_pinch_force / rMid);
-        vel += sinkVel * 2.0;
+      if (u_phys_regime < 0.5) {
+        vec2 shift = (u_scroll_offset + u_touch_offset) * u_warp_speed;
+        vec2 p0 = a_pPos * u_noise_scale * 0.5 + shift;
+        vel = vec2(noise(p0), noise(p0 + 10.0));
       }
 
       /* Stream particles along fluid velocity vector */
-      vec2 pFlow = a_pPos + vel * (0.008 * u_part_speed) + u_touch_offset * 0.08;
+      vec2 pFlow = a_pPos + vel * (0.015 * u_part_speed) + u_touch_offset * 0.08;
       pFlow = fract((pFlow + 1.0) * 0.5) * 2.0 - 1.0;
 
       v_alpha = smoothstep(1.0, 0.75, length(pFlow)) * 0.85;
@@ -975,10 +1054,20 @@
   /* ── SimplexNoise ──────────────────────────────────────────────────────── */
   (function(){"use strict";var F2=0.5*(Math.sqrt(3)-1),G2=(3-Math.sqrt(3))/6;function SimplexNoise(r){if(!r)r=Math.random;this.p=new Uint8Array(256);this.perm=new Uint8Array(512);this.permMod12=new Uint8Array(512);for(var i=0;i<256;i++)this.p[i]=i;for(var i=0;i<255;i++){var k=i+~~(r()*(256-i)),a=this.p[i];this.p[i]=this.p[k];this.p[k]=a}for(var i=0;i<512;i++){this.perm[i]=this.p[i&255];this.permMod12[i]=this.perm[i]%12}this.grad3=new Float32Array([1,1,0,-1,1,0,1,-1,0,-1,-1,0,1,0,1,-1,0,1,1,0,-1,-1,0,-1,0,1,1,0,-1,1,0,1,-1,0,-1,-1])}SimplexNoise.prototype={noise:function(x,y){var n0,n1,n2,s=(x+y)*F2,i=Math.floor(x+s),j=Math.floor(y+s),t=(i+j)*G2,x0=x-(i-t),y0=y-(j-t),i1,j1;if(x0>y0){i1=1;j1=0}else{i1=0;j1=1}var x1=x0-i1+G2,y1=y0-j1+G2,x2=x0-1+2*G2,y2=y0-1+2*G2,ii=i&255,jj=j&255,gi0=this.permMod12[ii+this.perm[jj]],gi1=this.permMod12[ii+i1+this.perm[jj+j1]],gi2=this.permMod12[ii+1+this.perm[jj+1]],t0=0.5-x0*x0-y0*y0;if(t0<0)n0=0;else{t0*=t0;n0=t0*t0*this.dot(this.grad3,gi0,x0,y0)}var t1=0.5-x1*x1-y1*y1;if(t1<0)n1=0;else{t1*=t1;n1=t1*t1*this.dot(this.grad3,gi1,x1,y1)}var t2=0.5-x2*x2-y2*y2;if(t2<0)n2=0;else{t2*=t2;n2=t2*t2*this.dot(this.grad3,gi2,x2,y2)}return 70*(n0+n1+n2)},dot:function(g,gi,x,y){return g[gi]*x+g[gi+1]*y}};window.SimplexNoise=SimplexNoise})();
 
-  /* ── WebGL setup ────────────────────────────────────────────────────────── */
+  /* ── WebGL setup (WebGL2 with WebGL1 fallback + Float Extensions) ─────── */
   const canvas = document.getElementById('glCanvas');
-  const gl     = canvas.getContext('webgl', { alpha: false, antialias: true, preserveDrawingBuffer: true });
+  const gl = canvas.getContext('webgl2', { alpha: false, antialias: true, preserveDrawingBuffer: true }) ||
+             canvas.getContext('webgl',  { alpha: false, antialias: true, preserveDrawingBuffer: true });
   if (!gl) alert('WebGL not supported!');
+
+  const isWebGL2 = typeof WebGL2RenderingContext !== 'undefined' && gl instanceof WebGL2RenderingContext;
+  const extFloat = gl.getExtension('EXT_color_buffer_float') || gl.getExtension('OES_texture_float');
+  const extFloatLinear = gl.getExtension('OES_texture_float_linear');
+  const extHalfFloat = gl.getExtension('OES_texture_half_float');
+
+  const texType = isWebGL2 ? gl.FLOAT : (extFloat ? gl.FLOAT : (extHalfFloat ? extHalfFloat.HALF_FLOAT_OES : gl.UNSIGNED_BYTE));
+  const texInternalFormat = isWebGL2 ? gl.RGBA16F : gl.RGBA;
+  const texFormat = gl.RGBA;
 
   const MAX_STOPS = 8;
 
@@ -987,100 +1076,144 @@
     if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) { console.error(gl.getShaderInfoLog(s)); return null; }
     return s;
   }
-  const prog = (() => {
+  function mkProgram(vsId, fsId) {
     const p = gl.createProgram();
-    gl.attachShader(p, mkShader(gl.VERTEX_SHADER,   document.getElementById('vertex-shader').text));
-    gl.attachShader(p, mkShader(gl.FRAGMENT_SHADER, document.getElementById('fragment-shader').text));
+    gl.attachShader(p, mkShader(gl.VERTEX_SHADER,   document.getElementById(vsId).text));
+    gl.attachShader(p, mkShader(gl.FRAGMENT_SHADER, document.getElementById(fsId).text));
     gl.linkProgram(p);
     if (!gl.getProgramParameter(p, gl.LINK_STATUS)) { console.error(gl.getProgramInfoLog(p)); return null; }
     return p;
-  })();
+  }
 
-  /* Particle Program */
-  const partProg = (() => {
-    const p = gl.createProgram();
-    gl.attachShader(p, mkShader(gl.VERTEX_SHADER,   document.getElementById('particle-vs').text));
-    gl.attachShader(p, mkShader(gl.FRAGMENT_SHADER, document.getElementById('particle-fs').text));
-    gl.linkProgram(p);
-    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) { console.error(gl.getProgramInfoLog(p)); return null; }
-    return p;
-  })();
+  /* GPGPU Programs */
+  const advectProg = mkProgram('sim-vs', 'advect-fs');
+  const forceProg  = mkProgram('sim-vs', 'force-fs');
+  const inductProg = mkProgram('sim-vs', 'induction-fs');
+  const divProg    = mkProgram('sim-vs', 'divergence-fs');
+  const jacobiProg = mkProgram('sim-vs', 'jacobi-fs');
+  const gradSubProg= mkProgram('sim-vs', 'gradsub-fs');
 
-  const aPos         = gl.getAttribLocation(prog,  'a_position');
-  const uRes         = gl.getUniformLocation(prog, 'u_resolution');
-  const uScr         = gl.getUniformLocation(prog, 'u_scroll_offset');
-  const uTouch       = gl.getUniformLocation(prog, 'u_touch_offset');
-  const uNSc         = gl.getUniformLocation(prog, 'u_noise_scale');
-  const uWAm         = gl.getUniformLocation(prog, 'u_warp_amount');
-  const uWSp         = gl.getUniformLocation(prog, 'u_warp_speed');
-  const uWarpScaleVar= gl.getUniformLocation(prog, 'u_warp_scale_var');
-  const uTileScale   = gl.getUniformLocation(prog, 'u_tile_scale');
-  const uTileOn      = gl.getUniformLocation(prog, 'u_tile_enabled');
-  const uTilePan     = gl.getUniformLocation(prog, 'u_tile_pan');
-  const uTileMode    = gl.getUniformLocation(prog, 'u_tile_mode');
-  const uTileBlend   = gl.getUniformLocation(prog, 'u_tile_blend');
-  const uLens        = gl.getUniformLocation(prog, 'u_lens_amount');
-  const uChroma      = gl.getUniformLocation(prog, 'u_chroma');
-  const uHue         = gl.getUniformLocation(prog, 'u_hue_shift');
-  const uSat         = gl.getUniformLocation(prog, 'u_saturation');
-  const uBright      = gl.getUniformLocation(prog, 'u_brightness');
-  const uVig         = gl.getUniformLocation(prog, 'u_vignette');
-  const uUVScale     = gl.getUniformLocation(prog, 'u_uv_scale');
-  const uPulse       = gl.getUniformLocation(prog, 'u_audio_pulse');
-  const uImage       = gl.getUniformLocation(prog, 'u_image');
-  const uRotate      = gl.getUniformLocation(prog, 'u_rotate');
-  const uFlip        = gl.getUniformLocation(prog, 'u_flip');
+  /* Presentation Programs */
+  const prog     = mkProgram('sim-vs', 'fragment-shader');
+  const partProg = mkProgram('particle-vs', 'particle-fs');
 
-  const uPhysRegime  = gl.getUniformLocation(prog, 'u_phys_regime');
-  const uVorticity   = gl.getUniformLocation(prog, 'u_vorticity');
-  const uTouchPos1   = gl.getUniformLocation(prog, 'u_touch_pos1');
-  const uTouchPos2   = gl.getUniformLocation(prog, 'u_touch_pos2');
-  const uTouchCount  = gl.getUniformLocation(prog, 'u_touch_count');
-  const uPinchForce  = gl.getUniformLocation(prog, 'u_pinch_force');
-
-  const uMode        = gl.getUniformLocation(prog, 'u_mode');
-  const uStopCol     = gl.getUniformLocation(prog, 'u_stop_col[0]');
-  const uStopPos     = gl.getUniformLocation(prog, 'u_stop_pos[0]');
-  const uStopCount   = gl.getUniformLocation(prog, 'u_stop_count');
+  /* Attributes & Uniforms */
+  const aPos = gl.getAttribLocation(prog, 'a_position');
+  const uRes = gl.getUniformLocation(prog, 'u_resolution');
+  const uScr = gl.getUniformLocation(prog, 'u_scroll_offset');
+  const uTouch = gl.getUniformLocation(prog, 'u_touch_offset');
+  const uNSc = gl.getUniformLocation(prog, 'u_noise_scale');
+  const uWAm = gl.getUniformLocation(prog, 'u_warp_amount');
+  const uWSp = gl.getUniformLocation(prog, 'u_warp_speed');
+  const uWarpScaleVar = gl.getUniformLocation(prog, 'u_warp_scale_var');
+  const uTileScale = gl.getUniformLocation(prog, 'u_tile_scale');
+  const uTileOn = gl.getUniformLocation(prog, 'u_tile_enabled');
+  const uTilePan = gl.getUniformLocation(prog, 'u_tile_pan');
+  const uTileMode = gl.getUniformLocation(prog, 'u_tile_mode');
+  const uTileBlend = gl.getUniformLocation(prog, 'u_tile_blend');
+  const uLens = gl.getUniformLocation(prog, 'u_lens_amount');
+  const uChroma = gl.getUniformLocation(prog, 'u_chroma');
+  const uHue = gl.getUniformLocation(prog, 'u_hue_shift');
+  const uSat = gl.getUniformLocation(prog, 'u_saturation');
+  const uBright = gl.getUniformLocation(prog, 'u_brightness');
+  const uVig = gl.getUniformLocation(prog, 'u_vignette');
+  const uUVScale = gl.getUniformLocation(prog, 'u_uv_scale');
+  const uPulse = gl.getUniformLocation(prog, 'u_audio_pulse');
+  const uImage = gl.getUniformLocation(prog, 'u_image');
+  const uVelTex = gl.getUniformLocation(prog, 'u_velTex');
+  const uRotate = gl.getUniformLocation(prog, 'u_rotate');
+  const uFlip = gl.getUniformLocation(prog, 'u_flip');
+  const uPhysRegime = gl.getUniformLocation(prog, 'u_phys_regime');
+  const uVorticity = gl.getUniformLocation(prog, 'u_vorticity');
+  const uTouchPos1 = gl.getUniformLocation(prog, 'u_touch_pos1');
+  const uTouchPos2 = gl.getUniformLocation(prog, 'u_touch_pos2');
+  const uTouchCount = gl.getUniformLocation(prog, 'u_touch_count');
+  const uPinchForce = gl.getUniformLocation(prog, 'u_pinch_force');
+  const uMode = gl.getUniformLocation(prog, 'u_mode');
+  const uStopCol = gl.getUniformLocation(prog, 'u_stop_col[0]');
+  const uStopPos = gl.getUniformLocation(prog, 'u_stop_pos[0]');
+  const uStopCount = gl.getUniformLocation(prog, 'u_stop_count');
 
   /* Particle Uniforms & Attribs */
-  const paPos        = gl.getAttribLocation(partProg,  'a_pPos');
-  const paSeed       = gl.getAttribLocation(partProg,  'a_pSeed');
-  const puScr        = gl.getUniformLocation(partProg, 'u_scroll_offset');
-  const puTouch      = gl.getUniformLocation(partProg, 'u_touch_offset');
-  const puNSc        = gl.getUniformLocation(partProg, 'u_noise_scale');
-  const puWSp        = gl.getUniformLocation(partProg, 'u_warp_speed');
-  const puPartSpeed  = gl.getUniformLocation(partProg, 'u_part_speed');
-  const puPartSize   = gl.getUniformLocation(partProg, 'u_part_size');
+  const paPos = gl.getAttribLocation(partProg, 'a_pPos');
+  const paSeed = gl.getAttribLocation(partProg, 'a_pSeed');
+  const puVelTex = gl.getUniformLocation(partProg, 'u_velTex');
+  const puScr = gl.getUniformLocation(partProg, 'u_scroll_offset');
+  const puTouch = gl.getUniformLocation(partProg, 'u_touch_offset');
+  const puNSc = gl.getUniformLocation(partProg, 'u_noise_scale');
+  const puWSp = gl.getUniformLocation(partProg, 'u_warp_speed');
+  const puPartSpeed = gl.getUniformLocation(partProg, 'u_part_speed');
+  const puPartSize = gl.getUniformLocation(partProg, 'u_part_size');
   const puPhysRegime = gl.getUniformLocation(partProg, 'u_phys_regime');
-  const puTime       = gl.getUniformLocation(partProg, 'u_time');
-  const puTouchPos1  = gl.getUniformLocation(partProg, 'u_touch_pos1');
-  const puTouchPos2  = gl.getUniformLocation(partProg, 'u_touch_pos2');
+  const puTime = gl.getUniformLocation(partProg, 'u_time');
+  const puTouchPos1 = gl.getUniformLocation(partProg, 'u_touch_pos1');
+  const puTouchPos2 = gl.getUniformLocation(partProg, 'u_touch_pos2');
   const puTouchCount = gl.getUniformLocation(partProg, 'u_touch_count');
   const puPinchForce = gl.getUniformLocation(partProg, 'u_pinch_force');
 
-  const vbuf = gl.createBuffer();
-  gl.bindBuffer(gl.ARRAY_BUFFER, vbuf);
-  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1,1,-1,-1,1,-1,1,1,-1,1,1]), gl.STATIC_DRAW);
+  /* Quad Geometry Buffer */
+  const quadBuf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, -1,1, 1,-1, 1,1]), gl.STATIC_DRAW);
 
   /* Particle Buffer Initialization (20,000 Particles) */
   const MAX_PARTICLES = 20000;
   const pPosData  = new Float32Array(MAX_PARTICLES * 2);
   const pSeedData = new Float32Array(MAX_PARTICLES);
-
   for (let i = 0; i < MAX_PARTICLES; i++) {
     pPosData[i * 2]     = (Math.random() * 2 - 1);
     pPosData[i * 2 + 1] = (Math.random() * 2 - 1);
     pSeedData[i]        = Math.random() * 100.0;
   }
-
   const pPosBuf = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, pPosBuf);
   gl.bufferData(gl.ARRAY_BUFFER, pPosData, gl.DYNAMIC_DRAW);
-
   const pSeedBuf = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, pSeedBuf);
   gl.bufferData(gl.ARRAY_BUFFER, pSeedData, gl.STATIC_DRAW);
+
+  /* ── GPGPU Framebuffers & Ping-Pong Setup ($256 \times 256$ Grid) ────────── */
+  const SIM_RES = 256;
+  function createFBO(w, h) {
+    const tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, texInternalFormat, w, h, 0, texFormat, texType, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+
+    const fb = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    return { fb, tex, width: w, height: h };
+  }
+
+  function createDoubleFBO(w, h) {
+    let fbo1 = createFBO(w, h);
+    let fbo2 = createFBO(w, h);
+    return {
+      get in() { return fbo1; },
+      get out() { return fbo2; },
+      swap() { const tmp = fbo1; fbo1 = fbo2; fbo2 = tmp; }
+    };
+  }
+
+  const velFBO   = createDoubleFBO(SIM_RES, SIM_RES);
+  const dyeFBO   = createDoubleFBO(SIM_RES, SIM_RES);
+  const mhdFBO   = createDoubleFBO(SIM_RES, SIM_RES);
+  const pressFBO = createDoubleFBO(SIM_RES, SIM_RES);
+  const divFBO   = createFBO(SIM_RES, SIM_RES);
+
+  function renderQuad(progToUse) {
+    gl.useProgram(progToUse);
+    const loc = gl.getAttribLocation(progToUse, 'a_position');
+    gl.enableVertexAttribArray(loc);
+    gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
+    gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+  }
 
   const simplex = new SimplexNoise();
 
@@ -1185,10 +1318,12 @@
     } catch (e) { alert('Webcam access denied or unavailable.'); }
   });
 
-  /* ── Mouse / Touch Interactive Fluid Stirring & Multi-Touch Sinks ─────── */
+  /* ── Mouse / Touch Interactive Fluid Stirring ─────────────────────────── */
   let touchOffset = [0, 0];
   let isDragging = false;
   let lastTouch = [0, 0];
+  let dragVel = [0, 0];
+  let dragPos = [0.5, 0.5];
 
   let touchCount = 0;
   let touchPos1 = [0.5, 0.5];
@@ -1204,6 +1339,8 @@
     if (event && (event.target.closest('#panel') || event.target.closest('#topBar'))) return;
     isDragging = true;
     lastTouch = [px, py];
+    dragPos = [px / window.innerWidth, 1.0 - py / window.innerHeight];
+    dragVel = [0, 0];
   }
 
   function onPointerMove(px, py) {
@@ -1212,10 +1349,13 @@
     const dy = (py - lastTouch[1]) * 0.005;
     touchOffset[0] += dx;
     touchOffset[1] += dy;
+    dragVel[0] = dx * 10.0;
+    dragVel[1] = -dy * 10.0;
+    dragPos = [px / window.innerWidth, 1.0 - py / window.innerHeight];
     lastTouch = [px, py];
   }
 
-  function onPointerUp() { isDragging = false; }
+  function onPointerUp() { isDragging = false; dragVel = [0, 0]; }
 
   window.addEventListener('mousedown', e => onPointerDown(e.clientX, e.clientY));
   window.addEventListener('mousemove', e => onPointerMove(e.clientX, e.clientY));
@@ -1298,9 +1438,9 @@
 
   window.addEventListener('resize', updateUVScale);
 
-  /* ── Parameters ─────────────────────────────────────────────────────────── */
+  /* ── Parameters & Presets ────────────────────────────────────────────────── */
   const DEFAULTS = {
-    physRegime:0, // 0=Noise Warp (Original Mode preserved!), 1=Navier-Stokes, 2=Viscoelastic
+    physRegime:0, // 0=Noise Warp, 1=GPGPU Navier-Stokes, 2=Viscoelastic, 3=MHD Plasma, 4=Solar Flare
     mode:0,       // 0=Gradient/Color Field, 1=Media, 2=Gradient Map
     partOn:false, partCount:10000, partSize:4.0, partSpeed:1.0,
     vorticity:0.80, viscosity:0.985,
@@ -1310,8 +1450,7 @@
     rotate:0, flipX:false, flipY:false,
     lens:0, chroma:0,
     hue:0, sat:1, bright:1, vignette:1,
-    baseSpd:0.10, // Active default baseline motion without needing audio
-    audioMult:8, smoothing:0.85,
+    baseSpd:0.10, audioMult:8, smoothing:0.85,
     colorSpeed:1.0, speedVar:0.3,
   };
 
@@ -1609,9 +1748,6 @@
   let smoothBass = 0, smoothMid = 0, smoothTreble = 0;
   let audioCtx, analyser, dataArray;
 
-  /* Band edges in Hz. Bin indices are derived from the live sample rate in
-     initAudio() rather than hardcoded: a bin is sampleRate/fftSize wide, so any
-     fixed index means a different frequency on different hardware. */
   const BAND_BASS_HZ   = 300;
   const BAND_MID_HZ    = 3500;
   const BAND_TREBLE_HZ = 20000;
@@ -1625,9 +1761,6 @@
     oscCtx.fillStyle = 'rgba(2,4,12,0.95)'; oscCtx.fillRect(0,0,w,h);
     if (audioReady && dataArray) {
       analyser.getByteFrequencyData(dataArray);
-      /* Spectrum is drawn up to ~65% of Nyquist. At fftSize 2048 there are more
-         bins than pixels, so each column takes the peak of the bins it covers
-         instead of drawing one sub-pixel bar per bin. */
       const shown = Math.floor(dataArray.length * 0.65);
       const cols = Math.max(1, Math.min(w, shown));
       const bw = w / cols;
@@ -1657,8 +1790,6 @@
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       analyser = audioCtx.createAnalyser();
-      /* 2048 gives ~23 Hz bins at 48 kHz. The previous 256 put the 300 Hz bass
-         edge inside bin 1, so the three bands could not be separated at all. */
       analyser.fftSize = 2048;
       audioCtx.createMediaStreamSource(stream).connect(analyser);
       dataArray = new Uint8Array(analyser.frequencyBinCount);
@@ -1706,6 +1837,19 @@
 
   /* ── Freeze / panel / dark / fullscreen ────────────────────────────────── */
   let frozen = false, panelOpen = true, darkUI = false;
+
+  function toggleFreeze() {
+    frozen = !frozen;
+    ['freezeTopBtn', 'pFreezeBtn'].forEach(id => {
+      const b = document.getElementById(id);
+      if (b) {
+        b.textContent = frozen ? '▶ RESUME' : '⏸ FREEZE';
+        b.classList.toggle('active', frozen);
+      }
+    });
+  }
+  document.getElementById('freezeTopBtn').addEventListener('click', toggleFreeze);
+  document.getElementById('pFreezeBtn').addEventListener('click', toggleFreeze);
 
   function setPanelTabUI() {
     const isMobile = window.innerWidth <= 768;
@@ -1772,8 +1916,10 @@
   if (snapTopBtn)   snapTopBtn.addEventListener('click', takeSnapshot);
   if (snapPanelBtn) snapPanelBtn.addEventListener('click', takeSnapshot);
 
+  /* Guard keyboard shortcuts against focused input/select/button elements */
   document.addEventListener('keydown', e => {
-    if (e.target.tagName === 'INPUT') return;
+    const tag = e.target.tagName;
+    if (tag === 'INPUT' || tag === 'SELECT' || tag === 'BUTTON' || tag === 'TEXTAREA') return;
     switch (e.key.toLowerCase()) {
       case 's': takeSnapshot(); break;
       case 'h': togglePanel(); break;
@@ -1785,7 +1931,7 @@
     }
   });
 
-  /* ── Render Loop ────────────────────────────────────────────────────────── */
+  /* ── GPGPU Render & Simulation Loop ─────────────────────────────────────── */
   let lastTime = 0, gTime = 0, satProg = 0, frameCount = 0;
   let tilePan = [0, 0];
   const stopColFlat = new Float32Array(MAX_STOPS * 3);
@@ -1797,6 +1943,112 @@
       (Math.sin(s*1.000)*Math.cos(s*0.618) + Math.sin(s*2.175)*0.28) * mag,
       (Math.cos(s*0.866)*Math.sin(s*1.234) + Math.cos(s*1.732)*0.28) * mag,
     ];
+  }
+
+  function runGPGPUSimulation(dt, effAmp, effBass, effMid, effTreble) {
+    const texelSize = [1.0 / SIM_RES, 1.0 / SIM_RES];
+    const simDt = Math.min(dt, 0.033);
+
+    /* 1. Velocity Advection Pass */
+    gl.viewport(0, 0, SIM_RES, SIM_RES);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, velFBO.out.fb);
+    gl.useProgram(advectProg);
+    gl.uniform1i(gl.getUniformLocation(advectProg, 'u_velocity'), 0);
+    gl.uniform1i(gl.getUniformLocation(advectProg, 'u_source'), 0);
+    gl.uniform2f(gl.getUniformLocation(advectProg, 'u_texelSize'), texelSize[0], texelSize[1]);
+    gl.uniform1f(gl.getUniformLocation(advectProg, 'u_dt'), simDt);
+    gl.uniform1f(gl.getUniformLocation(advectProg, 'u_dissipation'), P.viscosity !== undefined ? P.viscosity : 0.985);
+
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, velFBO.in.tex);
+    renderQuad(advectProg);
+    velFBO.swap();
+
+    /* 2. Forces Pass (Vorticity, Stirring, Multi-Touch, MHD Lorentz Force) */
+    const [sx, sy] = scrollWander(gTime, P.scrollSpd, P.scrollMag);
+    const dynVorticity = P.vorticity + effBass * P.audioMult * 0.15;
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, velFBO.out.fb);
+    gl.useProgram(forceProg);
+    gl.uniform1i(gl.getUniformLocation(forceProg, 'u_velocity'), 0);
+    gl.uniform1i(gl.getUniformLocation(forceProg, 'u_mhd'), 1);
+    gl.uniform2f(gl.getUniformLocation(forceProg, 'u_texelSize'), texelSize[0], texelSize[1]);
+    gl.uniform1f(gl.getUniformLocation(forceProg, 'u_dt'), simDt);
+    gl.uniform1f(gl.getUniformLocation(forceProg, 'u_physRegime'), P.physRegime);
+    gl.uniform1f(gl.getUniformLocation(forceProg, 'u_vorticity'), dynVorticity);
+    gl.uniform2f(gl.getUniformLocation(forceProg, 'u_dragVel'), dragVel[0], dragVel[1]);
+    gl.uniform2f(gl.getUniformLocation(forceProg, 'u_dragPos'), dragPos[0], dragPos[1]);
+    gl.uniform2f(gl.getUniformLocation(forceProg, 'u_touchPos1'), touchPos1[0], touchPos1[1]);
+    gl.uniform2f(gl.getUniformLocation(forceProg, 'u_touchPos2'), touchPos2[0], touchPos2[1]);
+    gl.uniform1f(gl.getUniformLocation(forceProg, 'u_touchCount'), touchCount);
+    gl.uniform1f(gl.getUniformLocation(forceProg, 'u_pinchForce'), pinchForce);
+    gl.uniform1f(gl.getUniformLocation(forceProg, 'u_audioPulse'), effAmp);
+    gl.uniform1f(gl.getUniformLocation(forceProg, 'u_time'), gTime);
+    gl.uniform1f(gl.getUniformLocation(forceProg, 'u_noiseScale'), P.noiseScale);
+    gl.uniform1f(gl.getUniformLocation(forceProg, 'u_warpSpeed'), P.warpSpd);
+    gl.uniform2f(gl.getUniformLocation(forceProg, 'u_scrollOffset'), sx, sy);
+
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, velFBO.in.tex);
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, mhdFBO.in.tex);
+    renderQuad(forceProg);
+    velFBO.swap();
+
+    /* 3. MHD Magnetic Vector Potential Induction Pass (Regimes 3 & 4) */
+    if (P.physRegime > 2.5) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, mhdFBO.out.fb);
+      gl.useProgram(inductProg);
+      gl.uniform1i(gl.getUniformLocation(inductProg, 'u_mhd'), 0);
+      gl.uniform1i(gl.getUniformLocation(inductProg, 'u_velocity'), 1);
+      gl.uniform2f(gl.getUniformLocation(inductProg, 'u_texelSize'), texelSize[0], texelSize[1]);
+      gl.uniform1f(gl.getUniformLocation(inductProg, 'u_dt'), simDt);
+      gl.uniform1f(gl.getUniformLocation(inductProg, 'u_diffusivity'), 0.8);
+      gl.uniform1f(gl.getUniformLocation(inductProg, 'u_time'), gTime);
+      gl.uniform2f(gl.getUniformLocation(inductProg, 'u_scrollOffset'), sx, sy);
+      gl.uniform1f(gl.getUniformLocation(inductProg, 'u_noiseScale'), P.noiseScale);
+      gl.uniform1f(gl.getUniformLocation(inductProg, 'u_warpSpeed'), P.warpSpd);
+
+      gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, mhdFBO.in.tex);
+      gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, velFBO.in.tex);
+      renderQuad(inductProg);
+      mhdFBO.swap();
+    }
+
+    /* 4. Divergence Computation Pass */
+    gl.bindFramebuffer(gl.FRAMEBUFFER, divFBO.fb);
+    gl.useProgram(divProg);
+    gl.uniform1i(gl.getUniformLocation(divProg, 'u_velocity'), 0);
+    gl.uniform2f(gl.getUniformLocation(divProg, 'u_texelSize'), texelSize[0], texelSize[1]);
+
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, velFBO.in.tex);
+    renderQuad(divProg);
+
+    /* 5. Jacobi Pressure Poisson Solver (16 Iterations) */
+    gl.useProgram(jacobiProg);
+    gl.uniform2f(gl.getUniformLocation(jacobiProg, 'u_texelSize'), texelSize[0], texelSize[1]);
+    gl.uniform1i(gl.getUniformLocation(jacobiProg, 'u_divergence'), 1);
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, divFBO.tex);
+
+    for (let i = 0; i < 16; i++) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, pressFBO.out.fb);
+      gl.uniform1i(gl.getUniformLocation(jacobiProg, 'u_pressure'), 0);
+      gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, pressFBO.in.tex);
+      renderQuad(jacobiProg);
+      pressFBO.swap();
+    }
+
+    /* 6. Pressure Projection / Gradient Subtraction Pass (Incompressible Solenoidal Field) */
+    gl.bindFramebuffer(gl.FRAMEBUFFER, velFBO.out.fb);
+    gl.useProgram(gradSubProg);
+    gl.uniform1i(gl.getUniformLocation(gradSubProg, 'u_pressure'), 0);
+    gl.uniform1i(gl.getUniformLocation(gradSubProg, 'u_velocity'), 1);
+    gl.uniform2f(gl.getUniformLocation(gradSubProg, 'u_texelSize'), texelSize[0], texelSize[1]);
+
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, pressFBO.in.tex);
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, velFBO.in.tex);
+    renderQuad(gradSubProg);
+    velFBO.swap();
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   }
 
   function render(time) {
@@ -1834,7 +2086,7 @@
     document.getElementById('seismicVal').textContent = effAmp.toFixed(3);
     drawOsc();
 
-    /* Time advance: Active baseline motion (P.baseSpd) + audio boost if initialized */
+    /* Time advance */
     let dynDt = 0;
     if (!frozen) {
       const audioBoost = (audioReady && audioEnabled) ? effAmp * P.audioMult * 0.15 : 0;
@@ -1846,6 +2098,9 @@
         stop.prog += stop.speed * P.colorSpeed * sm * dynDt;
       });
       satProg += SAT_CHG_SPD * (1 + P.speedVar * simplex.noise(gTime * SPD_CHG_FREQ, 60)) * dynDt;
+
+      /* Run multi-pass GPGPU Fluid & MHD simulation passes */
+      runGPGPUSimulation(dynDt, effAmp, effBass, effMid, effTreble);
     }
 
     /* Compute actual stop colors */
@@ -1858,7 +2113,7 @@
       ];
     });
 
-    /* Touch offset decay / smooth fluid velocity dissipation */
+    /* Touch offset decay */
     const viscDecay = P.viscosity !== undefined ? P.viscosity : 0.985;
     touchOffset[0] *= viscDecay;
     touchOffset[1] *= viscDecay;
@@ -1889,24 +2144,23 @@
       updateUVScale();
     }
 
+    /* ── PASS 1: Main Fluid Matter & Substrate Presentation Shader ──────── */
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, canvas.width, canvas.height);
     gl.clear(gl.COLOR_BUFFER_BIT);
 
-    /* ── PASS 1: Main Fluid Matter & Substrate Shader ─────────────────────── */
     gl.useProgram(prog);
-    gl.enableVertexAttribArray(aPos);
-    gl.bindBuffer(gl.ARRAY_BUFFER, vbuf);
-    gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
 
-    /* Bind texture */
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, texture);
     gl.uniform1i(uImage, 0);
 
-    /* Scroll wander */
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, velFBO.in.tex);
+    gl.uniform1i(uVelTex, 1);
+
     const [sx, sy] = scrollWander(gTime, P.scrollSpd, P.scrollMag);
 
-    /* Pack stop uniforms */
     stopColFlat.fill(0); stopPosFlat.fill(0);
     stops.forEach((stop, i) => {
       const c = actualCols[i];
@@ -1914,7 +2168,6 @@
       stopPosFlat[i]   = stop.pos;
     });
 
-    /* Upload uniforms with 3-band audio coupling */
     const dynVorticity = P.vorticity + effBass * P.audioMult * 0.15;
     const dynWarpSpd   = P.warpSpd   + effMid  * P.audioMult * 0.005;
     const dynHueShift  = P.hue       + effTreble * P.audioMult * 0.01;
@@ -1954,14 +2207,18 @@
     gl.uniform1fv(uStopPos,   stopPosFlat);
     gl.uniform1f(uStopCount,  stops.length);
 
-    gl.drawArrays(gl.TRIANGLES, 0, 6);
+    renderQuad(prog);
 
     /* ── PASS 2: Fluid Particle Tracers Overlay ───────────────────────────── */
     if (P.partOn) {
       gl.enable(gl.BLEND);
-      gl.blendFunc(gl.SRC_ALPHA, gl.ONE); // Glowing additive blending
+      gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
 
       gl.useProgram(partProg);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, velFBO.in.tex);
+      gl.uniform1i(puVelTex, 0);
+
       gl.uniform2f(puScr,       sx, sy);
       gl.uniform2f(puTouch,     touchOffset[0], touchOffset[1]);
       gl.uniform1f(puNSc,       P.noiseScale);
