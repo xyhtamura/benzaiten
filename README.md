@@ -11,6 +11,22 @@ Standalone speculative instrument named after Benzaiten—the goddess of everyth
 
 ---
 
+## Planned
+
+In order. The first item is what the root `ROADMAP.md` entry names as next.
+
+1. **JSON preset parameter import/export and custom user preset saving.** Round-trip the full `P` parameter set plus the gradient stop list, so a state reached by hand can be saved, reloaded, and shared.
+
+2. **Time-evolved magnetic vector potential for the MHD regimes.** Both MHD regimes read $A_z$ from a static noise field, so the field lines drift with the scroll offset but never evolve. Replacing that with an $A_z$ advanced by an induction equation on a ping-pong framebuffer pair is what would make `⚡ MHD PLASMA` and `☀️ SOLAR RECONNECTION` do the thing they are named after — reconnection is a time-dependent event, and nothing currently reconnects.
+
+   This is tracked here rather than in `physics/projects/` on purpose. The open question is recorded in `physics/GAPS.md` as *earmarked*, which is its honest status: it becomes a physics project when someone starts on the formulation itself — the stability conditions for the induction step at 60 FPS in WebGL — not when the shader gets a better-looking approximation. Work done here is instrument work, and should stay described as such unless and until it produces a result that holds outside this app.
+
+3. **Retune the solar flare threshold.** `smoothstep(0.3, 0.9, abs(Jz))` was set against the old first-difference stand-in for $J_z$. The 5-point Laplacian that replaced it has a spikier amplitude distribution, so the threshold fires at a different rate even though the RMS matches. Set it against the current operator by eye rather than by matching the old numbers.
+
+4. **Guard keyboard shortcuts against focused `<select>` elements.** The keydown handler exempts only `INPUT`, so with the physics regime dropdown focused, Space freezes the simulation instead of opening the dropdown and `S` takes a snapshot instead of type-ahead.
+
+---
+
 ## Log
 
 - **2026-08-01 — Antigravity**: Initialized standalone `benzaiten` project and repository. Built unified WebGL engine with Navier-Stokes fluid advection, multi-scale noise domain warp (`u_warp_scale_var`), procedural 8-stop color fields, media substrate upload, and hybrid gradient mapping. Reconfigured UI to be fully mobile-responsive with enlarged touch slider handles, responsive font scaling (`clamp()`), and launch defaulting to Mode 0 (Procedural Color Field). Verified locally over root HTTP server on port 8000 (`http://localhost:8000/benzaiten/`). Earmarked 2D MHD solver in `physics/GAPS.md`.
