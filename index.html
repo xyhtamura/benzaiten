@@ -633,13 +633,37 @@
     uniform float u_noiseScale;
     uniform float u_warpSpeed;
     uniform vec2  u_scrollOffset;
+    uniform float u_forceScale;
     varying vec2  v_uv;
 
     vec2 hash(vec2 p){p=vec2(dot(p,vec2(127.1,311.7)),dot(p,vec2(269.5,183.3)));return-1.+2.*fract(sin(p)*43758.5453123);}
     float noise(in vec2 p){const float K1=.366025404,K2=.211324865;vec2 i=floor(p+(p.x+p.y)*K1);vec2 a=p-i+(i.x+i.y)*K2;vec2 o=(a.x>a.y)?vec2(1.,0.):vec2(0.,1.);vec2 b=a-o+K2;vec2 c=a-1.+2.*K2;vec3 h=max(.5-vec3(dot(a,a),dot(b,b),dot(c,c)),0.);vec3 n=h*h*h*h*vec3(dot(a,hash(i+0.)),dot(b,hash(i+o)),dot(c,hash(i+1.)));return dot(n,vec3(70.));}
 
+    /* Baseline stirring strength, in texels/s^2 per unit of u_forceScale. Sized by
+       measurement so the default FLOW VELOCITY of 0.10 settles the plain
+       Navier-Stokes regime around CFL 1 — measured 0.9 to 1.4 depending on where
+       the stirring noise happens to be. That is enough for self-advection to carry
+       structure across the grid in a few seconds. The scheme is semi-Lagrangian and
+       so unconditionally stable, but much past 1 the backtrace overshoots a cell
+       per step and bilinear sampling starts visibly smearing detail. */
+    const float BASE_STIR = 350.0;
+
     void main() {
       vec2 vel = texture2D(u_velocity, v_uv).xy;
+
+      /* 0. Baseline stirring. Without this the velocity field has no driver at all
+         outside the MHD regimes: the swirl term below is feedback on whatever is
+         already moving, and drag/touch only act while the user is touching, so an
+         undisturbed field stays exactly zero and nothing warps. Taken as the curl
+         of a drifting noise streamfunction, which is divergence-free by
+         construction and so survives the pressure projection instead of being
+         mostly cancelled by it. */
+      vec2 pStir = v_uv * u_noiseScale * 1.2 + u_scrollOffset * u_warpSpeed
+                 + vec2(0.0, u_time * 0.05);
+      const float e = 0.01;
+      float sXp = noise(pStir + vec2(e, 0.0)), sXm = noise(pStir - vec2(e, 0.0));
+      float sYp = noise(pStir + vec2(0.0, e)), sYm = noise(pStir - vec2(0.0, e));
+      vec2 stirForce = vec2(sYp - sYm, -(sXp - sXm)) / (2.0 * e) * BASE_STIR * u_forceScale;
 
       /* 1. Curl-driven swirl force. This is not vorticity confinement in the
          Fedkiw sense — that is eps*h*(N x omega) with N = grad|omega|/|grad|omega||,
@@ -688,8 +712,12 @@
         vec2 lorentz = vec2(-Jz * Bfield.y, Jz * Bfield.x) * 0.6;
 
         if (u_physRegime > 3.5) {
-          /* Solar Reconnection Eruptions */
-          float flareThreshold = smoothstep(0.25, 0.85, abs(Jz));
+          /* Solar reconnection eruptions. Cutoffs are the 95th and 99th percentiles
+             of |Jz| measured on the settled field, so roughly 5% of the surface
+             shows some flare and 1% reaches full — current sheets are meant to be
+             rare and bright. |Jz| is heavily tailed (median 0.24, max ~217), which
+             is why these sit so far above the middle of the distribution. */
+          float flareThreshold = smoothstep(38.0, 88.0, abs(Jz));
           vec2 flareBurst = vec2(-Bfield.y, Bfield.x) * flareThreshold * 2.8;
           mhdForce = lorentz * 0.8 + flareBurst;
         } else {
@@ -700,7 +728,7 @@
       }
 
       /* Combine Forces */
-      vec2 totalForce = swirlForce + dragForce + touchForce + mhdForce;
+      vec2 totalForce = stirForce + swirlForce + dragForce + touchForce + mhdForce;
       if (u_physRegime > 1.5 && u_physRegime < 2.5) {
         /* Viscoelastic Shear-Thinning */
         float strain = length(totalForce) + 0.001;
@@ -733,8 +761,10 @@
     /* Fraction of Az replaced by the noise seed each frame. See the note below —
        this is an instrument term, not part of the induction equation. */
     const float SEED_MIX = 0.02;
-    /* Reference current density. Jz is stored divided by this so the value in the
-       texture is O(1) and the flare threshold downstream reads in units of it. */
+    /* Reference current density. Jz is stored divided by this to keep it well
+       inside half-float range once the Laplacian's 1/h^2 is applied — the raw
+       second difference carries a factor of 65536 at this grid size. Downstream
+       thresholds and the Lorentz coupling are expressed in these units. */
     const float J_REF = 1000.0;
 
     void main() {
@@ -908,7 +938,10 @@
 
       vec2 wo;
       if (u_phys_regime > 0.5) {
-        wo = gpgpuVel * 0.45;
+        /* Velocity is in texels/second; dividing by the sim resolution puts it in
+           UV/second so the warp reads the same regardless of how the field is
+           scaled internally. */
+        wo = gpgpuVel * (1.0 / 256.0) * 2.2;
       } else {
         /* Regime 0: Original Noise Warp Preserved */
         vec2 sc = u_scroll_offset + u_touch_offset;
@@ -1041,8 +1074,12 @@
         vel = vec2(noise(p0), noise(p0 + 10.0));
       }
 
-      /* Stream particles along fluid velocity vector */
-      vec2 pFlow = a_pPos + vel * (0.015 * u_part_speed) + u_touch_offset * 0.08;
+      /* Stream particles along the fluid velocity vector. In the GPGPU regimes vel
+         is in texels/second, so it converts to clip units (2 across the screen) by
+         2/SIM_RES; in regime 0 it is the O(1) noise field above and keeps its
+         original coupling. */
+      float velToClip = (u_phys_regime > 0.5) ? (2.0 / 256.0) * 0.30 : 0.015;
+      vec2 pFlow = a_pPos + vel * (velToClip * u_part_speed) + u_touch_offset * 0.08;
       pFlow = fract((pFlow + 1.0) * 0.5) * 2.0 - 1.0;
 
       v_alpha = smoothstep(1.0, 0.75, length(pFlow)) * 0.85;
@@ -1983,7 +2020,7 @@
     ];
   }
 
-  function runGPGPUSimulation(dt, effAmp, effBass, effMid, effTreble) {
+  function runGPGPUSimulation(dt, forceScale, effAmp, effBass, effMid, effTreble) {
     if (!simSupported) return;
     const texelSize = [1.0 / SIM_RES, 1.0 / SIM_RES];
     const simDt = Math.min(dt, 0.033);
@@ -2026,6 +2063,7 @@
     gl.uniform1f(gl.getUniformLocation(forceProg, 'u_noiseScale'), P.noiseScale);
     gl.uniform1f(gl.getUniformLocation(forceProg, 'u_warpSpeed'), P.warpSpd);
     gl.uniform2f(gl.getUniformLocation(forceProg, 'u_scrollOffset'), sx, sy);
+    gl.uniform1f(gl.getUniformLocation(forceProg, 'u_forceScale'), forceScale);
 
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, velFBO.in.tex);
     gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, mhdFBO.in.tex);
@@ -2140,8 +2178,12 @@
       });
       satProg += SAT_CHG_SPD * (1 + P.speedVar * simplex.noise(gTime * SPD_CHG_FREQ, 60)) * dynDt;
 
-      /* Run multi-pass GPGPU Fluid & MHD simulation passes */
-      runGPGPUSimulation(dynDt, effAmp, effBass, effMid, effTreble);
+      /* Run multi-pass GPGPU Fluid & MHD simulation passes.
+         The solver steps at the real frame dt, not dynDt. FLOW VELOCITY sets how
+         hard the fluid is driven (u_forceScale), not how fast its clock runs —
+         scaling the timestep instead made the CFL and diffusion numbers move with
+         a UI slider, so the scheme's stability depended on where it was set. */
+      runGPGPUSimulation(dt, P.baseSpd + audioBoost, effAmp, effBass, effMid, effTreble);
     }
 
     /* Compute actual stop colors */
