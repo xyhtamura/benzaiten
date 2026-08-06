@@ -15,9 +15,17 @@ Standalone speculative instrument named after Benzaiten—the goddess of everyth
 
 In order. The first item is what the root `ROADMAP.md` entry names as next.
 
-1. **JSON preset parameter import/export and custom user preset saving.** Round-trip the full `P` parameter set plus the gradient stop list, so a state reached by hand can be saved, reloaded, and shared.
+The governing principle, since it decides what counts as done: **this is a video instrument, not a physics code.** The physics is here because solving it produces images that are harder to get any other way, and because repurposing it as an image-making process is part of the point. So regimes that are cheap and not physically faithful stay — `DOMAIN WARP` is not a failed solver, it is a different instrument. What is not acceptable is a label claiming more than the mechanism does. Accuracy of description is the standard, not accuracy of simulation.
 
-2. **Reconsider `SEED_MIX` now that transport is live.** The noise-seed relaxation in `induction-fs` is no longer swamping the induction terms, but it is still there at 2% per frame. Whether it should come down further is now an aesthetic question rather than a correctness one — lower means the field's structure comes more from its own history and less from prescribed noise, at the cost of some liveliness when the flow is slow.
+1. **2.5D guide field.** Carry $B_z$ and $u_z$ on the same 2D grid — they fit in the two spare channels of the MHD framebuffer, so no new textures. The corona essentially always has a guide field, and guide-field reconnection is the realistic case rather than the null-point one currently modelled. Best physics gain per unit effort of anything left, at maybe 1.5x the cost of the current MHD pass.
+
+2. **BFECC or MacCormack advection.** Semi-Lagrangian with bilinear sampling adds numerical diffusion that acts as an uncontrolled extra resistivity, on top of the explicit $\eta$. Until that is measured and reduced, the reconnection *rate* is partly set by grid error, which is the specific thing stopping a claim of faithful reconnection. Costs two extra advection passes.
+
+3. **Multigrid pressure solve.** See the 2026-08-05 entry: Jacobi's convergence factor for the largest modes is $\cos(\pi/N)$, so at 256² the low-frequency divergence barely moves however many sweeps it gets — 16 and 160 land in the same place. A V-cycle over 128/64/32/16 would actually converge it. This is what currently stops the closed magnetic system decaying monotonically the way the theorem says it must.
+
+4. **JSON preset parameter import/export and custom user preset saving.** Round-trip the full `P` parameter set plus the gradient stop list, so a state reached by hand can be saved, reloaded, and shared.
+
+Deferred, on request: a longer written account of the physics and visual engine for `loosethreads/`, so the mechanism is legible without reading the shaders. Also parked: alternative takes on the MHD (compressible/conservative, or the Parker surface-braiding model, which is a genuinely different 2D geometry rather than a variant of this one).
 
 ---
 
@@ -68,4 +76,19 @@ In order. The first item is what the root `ROADMAP.md` entry names as next.
   Verified across 2400 frames in the solar regime: CFL steady at 0.91–0.99, no non-finite values, `glGetError()` clean, 0.41 ms/frame. All five regimes show live frame-to-frame motion, all six presets set their regime, all three substrate modes render.
 
   **Left undone**: nothing outstanding from this pass. The remaining `physics/GAPS.md` question is untouched and still earmarked — this work made the shipped scheme behave like the equations it names, but it did not establish the stability conditions the question actually asks for.
+- **2026-08-05 — Claude Code**: Made the magnetic field a closed system that can be switched on, and fixed an inconsistency in the pressure projection found while testing it.
+
+  **Why the injection term exists at all.** Worth writing down, because it looks like a fudge and is not one. In 2D, $A_z$ obeys a pure advection–diffusion equation with no source, so $\frac{d}{dt}\int \tfrac12 A_z^2 = -\eta\int|\nabla A_z|^2 \le 0$. The field can only decay, and no 2D flow can sustain it — the anti-dynamo result. Some forcing is therefore *required* for a non-decaying 2D field; it is not covering for a missing solver. (Textbook-level, but it wants a resolved citation before it goes any further into `physics/`.)
+
+  So the term is now exposed rather than hidden: `MAGNETIC INJECTION`, default 0.005, with **0 meaning a closed system that decays as it must**. Added a `RE-SEED FIELD` button and a one-frame full-strength initialisation, which also fires on entering an MHD regime, so the field starts from a real initial condition instead of accumulating out of the seed. The panel section only shows in regimes 3 and 4.
+
+  **Acceptance test, and it does not fully pass.** At injection 0 the field decays by 3.4x over ~20 s, but not monotonically — 4 rises across 11 samples, where theory permits none. Traced to the velocity field not being properly solenoidal: residual divergence sits around 8% of the velocity scale, so advection is not quite material transport and a converging region concentrates $A_z$ on the fixed grid.
+
+  **Pressure projection.** Chasing that turned up a real inconsistency. Divergence used centred differences and gradient subtraction used centred differences, but the Jacobi sweep inverts the *compact* 5-point Laplacian. Centred-composed-with-centred is a Laplacian on a stencil of spacing 2, which splits the grid into two checkerboards that never communicate, so divergence on the checkerboard mode was untouchable at any sweep count. Divergence is now forward-differenced and gradient subtraction backward-differenced, which compose exactly into the Laplacian being solved.
+
+  That is correct but not sufficient, and the reason is worth recording: Jacobi reduces error in the largest modes by a factor of $\cos(\pi/N)$ per sweep, which at $N = 256$ is $1 - 7.5\times10^{-5}$. Halving the lowest mode would need thousands of sweeps. Measured residual divergence at 16 / 30 / 60 / 100 sweeps: 0.109 / 0.099 / 0.083 / 0.085 — it plateaus, as predicted. `PRESSURE_ITERS` is now a named constant set to 60, which is where the measured benefit stops for 0.05 ms. Genuine convergence needs multigrid; added to Planned.
+
+  Verified: all ten shaders compile, live motion in all five regimes (frame-to-frame image delta 1.5–6.7), all six presets set regime and injection, all three substrate modes render, tracers draw, MHD panel shows and hides with the regime, 0.43 ms/frame, no console errors, `glGetError()` clean.
+
+  **Left undone**: steps 2 and 3 of the agreed three — the 2.5D guide field and BFECC advection — are not started; see Planned. The numerical-resistivity measurement I owe is best done alongside BFECC, since the point of it is the before/after.
 

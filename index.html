@@ -442,6 +442,15 @@
         <div class="cl"><span class="cn">FIELD DENSITY</span><span class="cv" id="v-noiseScale">2.5</span></div>
         <input type="range" id="s-noiseScale" min="0.5" max="8" step="0.1" value="2.5">
       </div>
+      <div class="cr" id="mhdGroup" style="display:none">
+        <div class="cl"><span class="cn">MAGNETIC INJECTION</span><span class="cv" id="v-fieldInject">0.005</span></div>
+        <input type="range" id="s-fieldInject" min="0" max="0.05" step="0.001" value="0.005">
+        <div style="font-family:var(--font-mono);font-size:9px;color:var(--dim);letter-spacing:0.06em;margin-top:4px;line-height:1.5;">
+          At 0 the magnetic field is a closed system and decays, as a 2D field must.
+          Above 0 it is continuously re-fed from a noise field.
+        </div>
+        <button id="reseedBtn" class="pbtn small" style="margin-top:6px">⟲ RE-SEED FIELD</button>
+      </div>
       <div class="cr">
         <div class="cl"><span class="cn">DISTORTION</span><span class="cv" id="v-warpAmt">0.36</span></div>
         <input type="range" id="s-warpAmt" min="0" max="1" step="0.005" value="0.36">
@@ -758,9 +767,10 @@
     vec2 hash(vec2 p){p=vec2(dot(p,vec2(127.1,311.7)),dot(p,vec2(269.5,183.3)));return-1.+2.*fract(sin(p)*43758.5453123);}
     float noise(in vec2 p){const float K1=.366025404,K2=.211324865;vec2 i=floor(p+(p.x+p.y)*K1);vec2 a=p-i+(i.x+i.y)*K2;vec2 o=(a.x>a.y)?vec2(1.,0.):vec2(0.,1.);vec2 b=a-o+K2;vec2 c=a-1.+2.*K2;vec3 h=max(.5-vec3(dot(a,a),dot(b,b),dot(c,c)),0.);vec3 n=h*h*h*h*vec3(dot(a,hash(i+0.)),dot(b,hash(i+o)),dot(c,hash(i+1.)));return dot(n,vec3(70.));}
 
-    /* Fraction of Az replaced by the noise seed each frame. See the note below —
-       this is an instrument term, not part of the induction equation. */
-    const float SEED_MIX = 0.02;
+    /* Fraction of Az replaced by the noise seed each frame — see the note below.
+       Driven from the MAGNETIC INJECTION control, and set to 1.0 for a single frame
+       to (re)initialise the field. */
+    uniform float u_seedMix;
     /* Reference current density. Jz is stored divided by this to keep it well
        inside half-float range once the Laplacian's 1/h^2 is applied — the raw
        second difference carries a factor of 65536 at this grid size. Downstream
@@ -775,15 +785,19 @@
       vec2 backCoord = v_uv - u_dt * u_texelSize * vel;
       float Az_adv = texture2D(u_mhd, backCoord).r;
 
-      /* Relaxation toward a drifting noise field. This is NOT part of the induction
-         equation — it is an instrument term that keeps the field alive and stops it
-         settling. At SEED_MIX per frame its time constant is ~50 frames (0.83 s at
-         60 FPS), which is currently far faster than the advective transport beside
-         it, so it dominates what Az looks like. physics/GAPS.md records what that
-         costs and why the entry is still earmarked. */
+      /* Injection from a drifting noise field. This is NOT part of the induction
+         equation — it is an instrument term, exposed as MAGNETIC INJECTION.
+
+         It exists because of a real constraint, not to cover for a missing solver:
+         in 2D, Az obeys a pure advection-diffusion equation with no source, so
+         d/dt of the integral of Az^2/2 equals -eta times the integral of |grad Az|^2,
+         which is never positive. The field can only decay, and no 2D flow can
+         sustain it. At u_seedMix = 0 this is a closed system that runs down, which
+         is the physically honest setting; above 0 it is explicitly driven, which is
+         the one that keeps looking alive. */
       vec2 pSeed = v_uv * u_noiseScale * 1.5 + u_scrollOffset * u_warpSpeed;
       float Az_seed = noise(pSeed);
-      Az_adv = mix(Az_adv, Az_seed, SEED_MIX);
+      Az_adv = mix(Az_adv, Az_seed, u_seedMix);
 
       /* 5-point Laplacian of Az at step n. The centre has to come from the same
          field as the neighbours: using the advected, seed-mixed centre here would
@@ -814,11 +828,22 @@
     uniform vec2  u_texelSize;
     varying vec2  v_uv;
     void main() {
-      float L = texture2D(u_velocity, v_uv - vec2(u_texelSize.x, 0.0)).x;
-      float R = texture2D(u_velocity, v_uv + vec2(u_texelSize.x, 0.0)).x;
-      float B = texture2D(u_velocity, v_uv - vec2(0.0, u_texelSize.y)).y;
-      float T = texture2D(u_velocity, v_uv + vec2(0.0, u_texelSize.y)).y;
-      float div = 0.5 * ((R - L) + (T - B));
+      /* Forward differences, paired with backward differences in the gradient
+         subtraction pass. The two compose exactly into the compact 5-point
+         Laplacian that the Jacobi sweep inverts.
+
+         The obvious choice — centred 0.5*(R-L) here and again in the gradient —
+         does not: it composes into a Laplacian on a stencil of spacing 2, which
+         splits the grid into two checkerboards that never see each other. The
+         projection then cannot touch divergence living on the checkerboard mode,
+         no matter how many sweeps it is given. Measured before this change: the
+         residual sat at 0.07 of the velocity scale at 16 sweeps and was still
+         0.072 at 160. */
+      float C  = texture2D(u_velocity, v_uv).x;
+      float Cy = texture2D(u_velocity, v_uv).y;
+      float R  = texture2D(u_velocity, v_uv + vec2(u_texelSize.x, 0.0)).x;
+      float T  = texture2D(u_velocity, v_uv + vec2(0.0, u_texelSize.y)).y;
+      float div = (R - C) + (T - Cy);
       gl_FragColor = vec4(div, 0.0, 0.0, 1.0);
     }
   </script>
@@ -849,12 +874,13 @@
     uniform vec2  u_texelSize;
     varying vec2  v_uv;
     void main() {
+      /* Backward differences, matching the forward differences in the divergence
+         pass so the pair composes into the compact 5-point Laplacian. */
+      float C = texture2D(u_pressure, v_uv).x;
       float L = texture2D(u_pressure, v_uv - vec2(u_texelSize.x, 0.0)).x;
-      float R = texture2D(u_pressure, v_uv + vec2(u_texelSize.x, 0.0)).x;
       float B = texture2D(u_pressure, v_uv - vec2(0.0, u_texelSize.y)).x;
-      float T = texture2D(u_pressure, v_uv + vec2(0.0, u_texelSize.y)).x;
       vec2 vel = texture2D(u_velocity, v_uv).xy;
-      vel -= 0.5 * vec2(R - L, T - B);
+      vel -= vec2(C - L, C - B);
       gl_FragColor = vec4(vel, 0.0, 1.0);
     }
   </script>
@@ -1518,7 +1544,7 @@
     physRegime:0, // 0=Noise Warp, 1=GPGPU Navier-Stokes, 2=Viscoelastic, 3=MHD Plasma, 4=Solar Flare
     mode:0,       // 0=Gradient/Color Field, 1=Media, 2=Gradient Map
     partOn:false, partCount:10000, partSize:4.0, partSpeed:1.0,
-    vorticity:0.80, viscosity:0.985,
+    vorticity:0.80, viscosity:0.985, fieldInject:0.005,
     noiseScale:2.5, warpAmt:0.36, warpSpd:0.02, warpScaleVar:0.0,
     scrollSpd:0.4, scrollMag:1.5,
     tileScale:1.0, tileEnabled:false, tileMode:0, tileBlend:0.5,
@@ -1542,11 +1568,26 @@
   const SAT_CHG_SPD  = 0.06;
   const SPD_CHG_FREQ = 0.04;
 
+  /* Set for one frame to write a fresh initial condition into the Az field. */
+  let mhdSeedPending = true;
+
+  /* Jacobi sweeps in the pressure Poisson solve. Jacobi kills grid-scale error in a
+     few passes but converges on the largest modes at a rate of cos(pi/N) per sweep,
+     so the low-frequency part of the divergence needs many more than feels
+     necessary. Chosen by measuring residual divergence against sweep count. */
+  let PRESSURE_ITERS = 60;
+
   /* ── Physics Regime Switching ────────────────────────────────────────────── */
   const physSelect = document.getElementById('s-physRegime');
   function setPhysRegime(prNum) {
+    const prev = P.physRegime;
     P.physRegime = parseInt(prNum);
     if (physSelect) physSelect.value = String(P.physRegime);
+    /* Entering an MHD regime starts the field from a fresh initial condition
+       rather than from whatever the last run decayed to. */
+    if (P.physRegime > 2.5 && !(prev > 2.5)) mhdSeedPending = true;
+    const mg = document.getElementById('mhdGroup');
+    if (mg) mg.style.display = P.physRegime > 2.5 ? '' : 'none';
   }
   if (physSelect) {
     physSelect.addEventListener('change', e => setPhysRegime(e.target.value));
@@ -1743,6 +1784,7 @@
   bindSlider('partSpeed',  v=>v.toFixed(2));
   bindSlider('baseSpd',    v=>v.toFixed(3));
   bindSlider('vorticity',  v=>v.toFixed(2));
+  bindSlider('fieldInject', v => v === 0 ? 'CLOSED (DECAYS)' : v.toFixed(3));
   bindSlider('viscosity',  v=>v.toFixed(3));
   bindSlider('noiseScale', v=>v.toFixed(1));
   bindSlider('warpAmt',    v=>v.toFixed(3));
@@ -1763,6 +1805,9 @@
   bindSlider('smoothing',  v => v.toFixed(2));
   bindSlider('colorSpeed', v => v.toFixed(2));
   bindSlider('speedVar',   v => v.toFixed(2));
+
+  const reseedBtn = document.getElementById('reseedBtn');
+  if (reseedBtn) reseedBtn.addEventListener('click', () => { mhdSeedPending = true; });
 
   function applyPreset(name) {
     const pr = PRESETS[name]; if (!pr) return;
@@ -2085,6 +2130,11 @@
       gl.uniform2f(gl.getUniformLocation(inductProg, 'u_scrollOffset'), sx, sy);
       gl.uniform1f(gl.getUniformLocation(inductProg, 'u_noiseScale'), P.noiseScale);
       gl.uniform1f(gl.getUniformLocation(inductProg, 'u_warpSpeed'), P.warpSpd);
+      /* A single full-strength frame writes the initial condition; after that the
+         field evolves under the induction equation plus whatever injection the
+         MAGNETIC INJECTION control asks for. */
+      gl.uniform1f(gl.getUniformLocation(inductProg, 'u_seedMix'), mhdSeedPending ? 1.0 : P.fieldInject);
+      mhdSeedPending = false;
 
       gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, mhdFBO.in.tex);
       gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, velFBO.in.tex);
@@ -2107,7 +2157,7 @@
     gl.uniform1i(gl.getUniformLocation(jacobiProg, 'u_divergence'), 1);
     gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, divFBO.tex);
 
-    for (let i = 0; i < 16; i++) {
+    for (let i = 0; i < PRESSURE_ITERS; i++) {
       gl.bindFramebuffer(gl.FRAMEBUFFER, pressFBO.out.fb);
       gl.uniform1i(gl.getUniformLocation(jacobiProg, 'u_pressure'), 0);
       gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, pressFBO.in.tex);
