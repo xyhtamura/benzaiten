@@ -2,7 +2,7 @@
 
 Standalone speculative instrument named after Benzaiten—the goddess of everything that flows (water, sound, time, eloquence, fluid matter).
 
-- **Mechanism**: 2D GPGPU Navier-Stokes fluid dynamics solver + multi-scale noise domain warp + Web Audio FFT reactivity.
+- **Mechanism**: video synthesiser whose image is the read-out of a live 2D fluid simulation — semi-Lagrangian advection, curl-noise stirring, pressure projection on a 256² GPU grid — with optional magnetohydrodynamics, a noise domain-warp regime that runs no simulation, and Web Audio FFT coupling.
 - **Substrates**:
   - `Mode 0`: Procedural Color Field (drifting 8-stop color ramp editor, stop locking/capture, presets).
   - `Mode 1`: Media Substrate (image / looping video / live webcam feed).
@@ -91,4 +91,15 @@ Deferred, on request: a longer written account of the physics and visual engine 
   Verified: all ten shaders compile, live motion in all five regimes (frame-to-frame image delta 1.5–6.7), all six presets set regime and injection, all three substrate modes render, tracers draw, MHD panel shows and hides with the regime, 0.43 ms/frame, no console errors, `glGetError()` clean.
 
   **Left undone**: steps 2 and 3 of the agreed three — the 2.5D guide field and BFECC advection — are not started; see Planned. The numerical-resistivity measurement I owe is best done alongside BFECC, since the point of it is the before/after.
+- **2026-08-05 — Claude Code**: Brought every description of this project into line with what it does, and folded the remaining physics work into the plan.
+
+  The framing that decides all of it is now written at the top of Planned: this is a video instrument, not a physics code. Regimes that are cheap and not faithful stay, because they are different instruments rather than failed solvers. The standard is that no label claims more than its mechanism.
+
+  Rewrote the public entry as a **video synthesiser**. The old copy said "video processor and graphics generator" with "magnetohydrodynamics (MHD) plasma and solar reconnection solvers" — the second half overstated what runs, both when it was written (the field was static noise) and now (a prescribed injection term feeds it unless the control is set to zero). The new copy names the mechanism: a 2D incompressible fluid on a 256² GPU grid whose velocity field warps the image, five regimes including one that runs no simulation at all, and the injection control described for what it is. It states the scope plainly — cross-sectional plane, incompressible, idealisations named here rather than smoothed over — and records the line back to Hadean Flare, since the mutating sun is the point and not decoration.
+
+  Updated all four surfaces `PORTFOLIO_GUIDE.md` requires in the same sitting: `xyhtamura.github.io/index.html`, `xyhtamura.github.io/portfolio/data.js`, and the two documents in `profiles/`. Also corrected the two internal Mechanism lines — this file's and the root `ROADMAP.md` entry's — which both still said "Navier-Stokes fluid dynamics solver".
+
+  `ROADMAP.md` **Next in Dev** now names the 2.5D guide field, matching Planned item 1, with BFECC advection and the multigrid pressure solve behind it. Verified the public entry renders and the portfolio database picks up the new blurb with no stale text.
+
+  **Left undone**: Planned items 1–3 are the physics work still owed. Unrelated and pre-existing: the portfolio page requests 14 card images under `xyhtamura.github.io/card/` that return 404, which has nothing to do with this project but will be visible to anyone loading that page.
 
